@@ -1,0 +1,12 @@
+[package]
+name = "gw2ei-model"
+description = "Domain model: typed combat events and CombatData aggregation (Rust port of ParsedData/CombatEvents + CombatData)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gw2ei-parse = { path = "../gw2ei-parse" }
