@@ -770,3 +770,32 @@ fn stun_break_direction_and_duration() {
         other => panic!("unexpected {other:?}"),
     }
 }
+
+// ===== P4:WvWObjectiveStatus 聚合(首现序 + 同 key owners 追加)=====
+
+#[test]
+fn wvw_objective_status_first_seen_aggregation() {
+    let mk = |t: i64, map: i32, obj: u32, team: i32| {
+        let mut r = state_row(StateChange::WvWObjectiveStatus);
+        r.time = t;
+        r.value = map; // MapID
+        r.skill_id = obj; // ObjectiveID
+        r.buff_dmg = team; // TeamID
+        r
+    };
+    // 首现序:obj34 → obj52 → obj34(同 key 追加 owners;不合并)
+    let data = eventize(vec![
+        mk(1000, 96, 34, 707),
+        mk(2000, 96, 52, 433),
+        mk(3000, 96, 34, 2767),
+    ])
+    .expect("eventize");
+    let objs = &data.metadata.wvw_objective_statuses;
+    assert_eq!(objs.len(), 2, "first-seen keys: 34 then 52");
+    assert_eq!(objs[0].map_id, 96);
+    assert_eq!(objs[0].objective_id, 34);
+    assert_eq!(objs[0].owners, vec![(707, 1000), (2767, 3000)]);
+    assert_eq!(objs[1].map_id, 96);
+    assert_eq!(objs[1].objective_id, 52);
+    assert_eq!(objs[1].owners, vec![(433, 2000)]);
+}

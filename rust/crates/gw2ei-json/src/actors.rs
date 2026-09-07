@@ -512,8 +512,68 @@ pub fn build_damage_taken_dist(
     out
 }
 
-fn skill_id_of(log: &ParsedLog, hl: &HealthLine) -> u32 {
-    match &log.events[hl.line.ev] {
+/// 行级 dist 构建（minions 组复用;行已按组时间序;downContribution 空 ——
+/// C# JsonDamageDistBuilder 的 minion 调用传 null）。
+pub fn dist_from_lines(
+    ctx: &Ctx,
+    skills: &SkillTable,
+    cols: &mut Collectors,
+    rows: &[HealthLine],
+    bb_rows: &[crate::rows::DmgLine],
+    _can_crit: &dyn Fn(i64) -> bool,
+) -> Vec<JsonDamageDist> {
+    let log = ctx.log;
+    let mut groups: Vec<(i64, Vec<HealthLine>)> = Vec::new();
+    for hl in rows {
+        let id = crate::signed_id(skill_id_of(log, hl));
+        match groups.iter_mut().find(|(g, _)| *g == id) {
+            Some((_, v)) => v.push(*hl),
+            None => groups.push((id, vec![*hl])),
+        }
+    }
+    let mut bb: Vec<(i64, Vec<crate::rows::DmgLine>)> = Vec::new();
+    for l in bb_rows {
+        let id = crate::signed_id(dmg_line_skill_id(log, l));
+        match bb.iter_mut().find(|(g, _)| *g == id) {
+            Some((_, v)) => v.push(*l),
+            None => bb.push((id, vec![*l])),
+        }
+    }
+    let mut out: Vec<JsonDamageDist> = Vec::new();
+    for (id, rows) in &groups {
+        let indirect = rows.iter().any(|hl| {
+            stats::row_view(ctx, hl)
+                .map(|r| r.is_non_direct)
+                .unwrap_or(false)
+        });
+        let brls: Vec<crate::rows::DmgLine> = bb
+            .iter()
+            .find(|(g, _)| g == id)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        out.push(one_dist(ctx, skills, cols, *id, rows, &brls, indirect, &Default::default()));
+    }
+    for (id, brls) in &bb {
+        if groups.iter().any(|(g, _)| g == id) {
+            continue;
+        }
+        let mut d = empty_dist(*id);
+        for l in brls {
+            d.hits += 1;
+            d.connected_hits += 1;
+            d.total_breakbar_damage += match &log.events[l.ev] {
+                CombatEvent::BreakbarDamage(f) | CombatEvent::BreakbarRecovery(f) => f.value,
+                _ => 0.0,
+            };
+        }
+        d.total_breakbar_damage = (d.total_breakbar_damage * 10.0).round_ties_even() / 10.0;
+        skills_insert(skills, cols, *id);
+        out.push(d);
+    }
+    out
+}
+
+fn skill_id_of(log: &ParsedLog, hl: &HealthLine) -> u32 {    match &log.events[hl.line.ev] {
         CombatEvent::DirectHealthDamage(f)
         | CombatEvent::NonDirectHealthDamage(f)
         | CombatEvent::NoDamageHealthDamage(f) => f.skill.skill_id,

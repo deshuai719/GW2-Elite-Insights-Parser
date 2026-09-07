@@ -100,6 +100,9 @@ pub(crate) struct Collector<'a> {
     pub(crate) split_ground_by_tracking: BTreeMap<u32, Vec<usize>>,
     /// EffectAgentCreate start 的 tracking(行 Pad)。
     pub(crate) split_agent_by_tracking: BTreeMap<u32, Vec<usize>>,
+    /// WvWObjectiveStatus 聚合 key → `metadata.wvw_objective_statuses` 下标
+    ///（P4；首现序聚合）。
+    pub(crate) wvw_objectives_by_key: BTreeMap<i64, usize>,
 }
 
 impl<'a> Collector<'a> {
@@ -143,6 +146,7 @@ pub fn build_combat_data(log: EvtcRawLog) -> Result<CombatData, ModelError> {
         effect_starts_by_tracking: BTreeMap::new(),
         split_ground_by_tracking: BTreeMap::new(),
         split_agent_by_tracking: BTreeMap::new(),
+        wvw_objectives_by_key: BTreeMap::new(),
     };
 
     // 第一遍：essential metadata 先行（CombatData.cs:556-564）。

@@ -220,7 +220,7 @@ pub struct JsonMechanic {
     pub id: i64,
     #[serde(rename = "instid")]
     pub instid: i64,
-    #[serde(rename = "weight")]
+    #[serde(rename = "weight", serialize_with = "ser_f64")]
     pub weight: f64,
 }
 

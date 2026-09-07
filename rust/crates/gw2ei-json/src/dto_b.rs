@@ -4,15 +4,14 @@
 //! - C# double 字段 → `f64` + `ser_f64`（整数值输出整数 token,与 C# 一致）;
 //! - C# int/long 字段 → `i64`;时间轴/1s 桶/计数恒 int。
 //!
-//! OOS(P3+)块不在 DTO 中出现(序列化省略;对拍 OOS 剔除):buff 统计 16
-//! 组(buffUptimes/buffVolumes/self/group/offGroup/squad ×Active)、damage
-//! Modifiers×4、EXT、combatReplayData、boonsStates、conditionsStates、
-//! activeCombatMinions、minions、activeRangerPets、commanderTagStates、
-//! activeClones 等;damageModifiers 在 C# 为恒空列表照常输出,本侧省略。
+//! OOS(P3+)块不在 DTO 中出现(序列化省略;对拍 OOS 剔除):damage Modifiers×4、
+//! EXT、buffVolumes 系、activeCombatMinions、activeRangerPets、
+//! commanderTagStates、activeClones 等;P4 起 combatReplayData/minions/
+//! boonsStates/conditionsStates 已实现。
 
 use serde::Serialize;
 
-use crate::ser::ser_f64;
+use crate::ser::{ser_f32_list, ser_f32_pairs, ser_f64};
 
 // ===== JsonPlayer（JsonPlayer.cs;键序按官方输出实测）=====
 #[derive(Serialize)]
@@ -139,6 +138,11 @@ pub struct JsonPlayer {
     pub conditions_states: Vec<Vec<i64>>,
     #[serde(rename = "boonsStates")]
     pub boons_states: Vec<Vec<i64>>,
+    // ---- P4:CR + minions(JsonActor 基类;值类无空省略语义)----
+    #[serde(rename = "combatReplayData", skip_serializing_if = "Option::is_none")]
+    pub combat_replay_data: Option<JsonActorCombatReplayData>,
+    #[serde(rename = "minions", skip_serializing_if = "Option::is_none")]
+    pub minions: Option<Vec<JsonMinions>>,
 }
 
 // ===== JsonNPC（JsonNPC.cs）=====
@@ -211,6 +215,11 @@ pub struct JsonNpc {
     pub conditions_states: Vec<Vec<i64>>,
     #[serde(rename = "boonsStates")]
     pub boons_states: Vec<Vec<i64>>,
+    // ---- P4:CR + minions(JsonActor 基类;值类无空省略语义)----
+    #[serde(rename = "combatReplayData", skip_serializing_if = "Option::is_none")]
+    pub combat_replay_data: Option<JsonActorCombatReplayData>,
+    #[serde(rename = "minions", skip_serializing_if = "Option::is_none")]
+    pub minions: Option<Vec<JsonMinions>>,
 }
 
 // ===== JsonActorUtilities =====
@@ -650,4 +659,68 @@ pub struct JsonBuffsGenerationData {
     pub extended: f64,
     #[serde(rename = "byExtension", serialize_with = "ser_f64")]
     pub by_extension: f64,
+}
+
+// ===== P4：combatReplayData / minions（JsonActor 扩展）=====
+
+/// JsonActorCombatReplayData（JsonActorCombatReplayData）—— 8 键恒有;
+/// dead/down/dc 为空数组也输出;positions/orientations 随 RawFormatTimelineArrays。
+#[derive(Serialize)]
+pub struct JsonActorCombatReplayData {
+    #[serde(rename = "start")]
+    pub start: i64,
+    #[serde(rename = "end")]
+    pub end: i64,
+    #[serde(rename = "iconURL")]
+    pub icon_url: String,
+    #[serde(rename = "positions", serialize_with = "ser_f32_pairs")]
+    pub positions: Vec<Vec<f32>>,
+    #[serde(rename = "orientations", serialize_with = "ser_f32_list")]
+    pub orientations: Vec<f32>,
+    #[serde(rename = "dead")]
+    pub dead: Vec<Vec<i64>>,
+    #[serde(rename = "down")]
+    pub down: Vec<Vec<i64>>,
+    #[serde(rename = "dc")]
+    pub dc: Vec<Vec<i64>>,
+}
+
+/// JsonMinions（JsonActors/JsonMinions.cs;键序按官方输出实测）。rotation/
+/// combatReplayData 按有无省略;EXT 恒无。
+#[derive(Serialize)]
+pub struct JsonMinions {
+    #[serde(rename = "name")]
+    pub name: String,
+    #[serde(rename = "id")]
+    pub id: i64,
+    #[serde(rename = "totalDamage")]
+    pub total_damage: Vec<i64>,
+    #[serde(rename = "totalTargetDamage")]
+    pub total_target_damage: Vec<Vec<i64>>,
+    #[serde(rename = "totalDamageTaken")]
+    pub total_damage_taken: Vec<i64>,
+    #[serde(rename = "totalBreakbarDamage")]
+    pub total_breakbar_damage: Vec<f64>,
+    #[serde(rename = "totalTargetBreakbarDamage")]
+    pub total_target_breakbar_damage: Vec<Vec<f64>>,
+    #[serde(rename = "totalBreakbarDamageTaken")]
+    pub total_breakbar_damage_taken: Vec<f64>,
+    #[serde(rename = "totalShieldDamage")]
+    pub total_shield_damage: Vec<i64>,
+    #[serde(rename = "totalTargetShieldDamage")]
+    pub total_target_shield_damage: Vec<Vec<i64>>,
+    #[serde(rename = "totalShieldDamageTaken")]
+    pub total_shield_damage_taken: Vec<i64>,
+    #[serde(rename = "totalDamageDist")]
+    pub total_damage_dist: Vec<Vec<JsonDamageDist>>,
+    #[serde(rename = "targetDamageDist")]
+    pub target_damage_dist: Vec<Vec<Vec<JsonDamageDist>>>,
+    #[serde(rename = "totalDamageTakenDist")]
+    pub total_damage_taken_dist: Vec<Vec<JsonDamageDist>>,
+    #[serde(rename = "rotation", skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<Vec<JsonRotation>>,
+    #[serde(rename = "isUniquePerTimeFrame")]
+    pub is_unique_per_time_frame: bool,
+    #[serde(rename = "combatReplayData", skip_serializing_if = "Option::is_none")]
+    pub combat_replay_data: Option<Vec<JsonActorCombatReplayData>>,
 }

@@ -450,6 +450,33 @@ pub struct EffectGuidInfo {
     pub default_duration: i64,
 }
 
+// ===== H 组子集：WvWObjectiveStatus（P4；StatusEvents/WvWObjectiveStatusEvent.cs）=====
+
+/// `WvWObjectiveStatusEvent`（WvWObjectiveStatusEvent.cs）的**聚合面**：
+/// 每行 `MapID=Value`、`ObjectiveID=(int)SkillID`、`AutoUpgradeProgress=Pad`，
+/// owner = (TeamID=(uint)BuffDmg, Time)。同 key 行在工厂按首现序聚合进同一
+/// 事件（owners 追加不合并）。行级构造在 C# 构造时即按静态表判 `IsUnknown`
+/// 丢弃 —— 表过滤留在 JSON 层（gw2ei-json/wvw.rs），模型层保原始聚合
+/// （IsUnknown 是 (map, objective) 的静态属性，后置过滤结果与 C# 等价）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WvWObjectiveStatusEventFields {
+    /// 地图 id（行 Value）。
+    pub map_id: i32,
+    /// objective id（行 SkillID 的 i32 视图）。
+    pub objective_id: i32,
+    /// 升级进度（行 Pad）。
+    pub auto_upgrade_progress: u32,
+    /// (team id, time) 对，按行事件时间序追加。
+    pub owners: Vec<(u32, i64)>,
+}
+
+impl WvWObjectiveStatusEventFields {
+    /// 聚合 key（C# `(MapID << 16) + ObjectiveID`，long 运算）。
+    pub fn key(&self) -> i64 {
+        (i64::from(self.map_id) << 16) + i64::from(self.objective_id)
+    }
+}
+
 // ===== G 组：metadata 事件（MetaDataEvents/）=====
 
 /// `InstanceStartEvent`：TimeOffsetFromInstanceCreation=logStart-SrcAgent、

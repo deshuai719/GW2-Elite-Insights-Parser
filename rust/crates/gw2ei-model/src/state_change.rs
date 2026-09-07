@@ -566,7 +566,7 @@ pub(crate) fn dispatch_state_change(c: &mut Collector<'_>, item: &EvtcCombatItem
         S::MissileLaunch | S::MissileRemove => {
             c.bump_unsupported(UnsupportedEventKind::Missile)
         }
-        S::WvWObjectiveStatus => c.bump_unsupported(UnsupportedEventKind::WvWObjectiveStatus),
+        S::WvWObjectiveStatus => dispatch_wvw_objective_status(c, item),
         S::GadgetAnimation => c.bump_unsupported(UnsupportedEventKind::GadgetAnimation),
         S::GadgetCaptureOutlineShow
         | S::GadgetCaptureSplitPercent
@@ -599,6 +599,25 @@ fn buff_stack_base_fields(item: &EvtcCombatItem) -> BuffEventFields {
         by: 0,
         to: item.src_agent,
         iff: item.iff,
+    }
+}
+
+/// WvWObjectiveStatus 行聚合（CombatEventFactory.cs:555-569）。
+/// 第二遍按时间序处理 → 同 key 行首现序聚合、owners 追加。
+fn dispatch_wvw_objective_status(c: &mut Collector<'_>, item: &EvtcCombatItem) {
+    let fields = WvWObjectiveStatusEventFields {
+        map_id: item.value,
+        objective_id: item.skill_id as i32,
+        auto_upgrade_progress: item.pad,
+        owners: vec![(item.buff_dmg as u32, item.time)],
+    };
+    let key = fields.key();
+    if let Some(&idx) = c.wvw_objectives_by_key.get(&key) {
+        c.metadata.wvw_objective_statuses[idx].owners.extend(fields.owners);
+    } else {
+        let idx = c.metadata.wvw_objective_statuses.len();
+        c.metadata.wvw_objective_statuses.push(fields);
+        c.wvw_objectives_by_key.insert(key, idx);
     }
 }
 

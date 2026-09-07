@@ -13,10 +13,14 @@ pub mod content;
 pub mod ctx;
 pub mod instant;
 pub mod json_buffs;
+pub mod mechanics;
+pub mod minions;
+pub mod replay;
 pub mod dto_a;
 pub mod dto_b;
 pub mod rows;
 pub mod ser;
+pub mod wvw;
 pub mod skills;
 pub mod stats;
 

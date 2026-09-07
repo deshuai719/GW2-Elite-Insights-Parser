@@ -7,7 +7,61 @@
 //! 模块输出以对齐 golden 的 token 形状（对拍为 Value 级比较,token 类型也须
 //! 一致:`0` 整数 token vs `0.0` 浮点 token 在 serde_json::Value 不相等）。
 
-use serde::Serializer;
+use serde::ser::SerializeSeq;
+use serde::{Serialize, Serializer};
+
+/// C# float 字段序列化：STJ 输出 float 的**最短往返十进制**（f32 语义，如
+/// `21.821` 而非其精确值 `21.820999145507812`）。Rust f32 走 serde_json
+/// 会先扩成 f64 全精度 —— 这里先取最短 f32 表示的 f64 再输出。
+pub fn ser_f32<S>(v: &f32, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let short: f64 = format!("{v}").parse().unwrap_or_else(|_| f64::from(*v));
+    ser_f64(&short, s)
+}
+
+/// `Vec<f32>` 平面序列化（元素逐个 ser_f32）。
+pub fn ser_f32_list<S>(v: &[f32], s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut seq = s.serialize_seq(Some(v.len()))?;
+    for x in v {
+        seq.serialize_element(&F32Short(*x))?;
+    }
+    seq.end()
+}
+
+/// `Vec<f32>` 元素的 short 表示代理。
+struct F32Short(f32);
+
+impl Serialize for F32Short {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        ser_f32(&self.0, s)
+    }
+}
+
+/// `&[f32]` 代理（内嵌列表）。
+struct F32List<'a>(&'a [f32]);
+
+impl Serialize for F32List<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        ser_f32_list(self.0, s)
+    }
+}
+
+/// `Vec<Vec<f32>>`（[x, y] 对）序列化。
+pub fn ser_f32_pairs<S>(v: &[Vec<f32>], s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut seq = s.serialize_seq(Some(v.len()))?;
+    for pair in v {
+        seq.serialize_element(&F32List(pair))?;
+    }
+    seq.end()
+}
 
 /// `f64` 字段序列化:整数值 → 整数 token;NaN/Inf → 字符串;否则最短往返。
 pub fn ser_f64<S>(v: &f64, s: S) -> Result<S::Ok, S::Error>

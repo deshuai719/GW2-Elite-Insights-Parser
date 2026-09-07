@@ -85,9 +85,16 @@ pub fn build_json(ctx: &Ctx) -> Result<JsonLog, crate::BuildError> {
         }
     }
     let mut team_desc = std::collections::BTreeMap::new();
+    // P4：TeamGUID 事件链（IDToGUID ContentLocal=Team 行;TeamID=ContentID）
+    // —— JsonLogBuilder.cs 的 GetTeamGUIDEventByTeamID 反查。
+    let team_guid_by_id = crate::wvw::team_guid_by_id(log);
+    // ---- wvWMapData（JsonLogBuilder.cs:308-312;副作用 3 team id 进 teamMap）----
+    let wvw_map_data = ctx.meta.wvw_teams.as_ref().map(|w| {
+        crate::wvw::build_wvw_map_data(log, w, &mut cols.team_map)
+    });
     for &tid in &cols.team_map {
-        if let Some(guid) = team_guid(ctx, tid) {
-            team_desc.insert(format!("t{tid}"), TeamDesc { guid });
+        if let Some(guid) = team_guid_by_id.get(&tid) {
+            team_desc.insert(format!("t{tid}"), TeamDesc { guid: guid.clone() });
         }
     }
 
@@ -174,7 +181,7 @@ pub fn build_json(ctx: &Ctx) -> Result<JsonLog, crate::BuildError> {
         targets,
         players,
         phases,
-        mechanics: None,
+        mechanics: crate::mechanics::build_mechanics(ctx),
         upload_links: vec![String::new()],
         skill_map: skill_descs,
         buff_map: buff_descs,
@@ -183,8 +190,8 @@ pub fn build_json(ctx: &Ctx) -> Result<JsonLog, crate::BuildError> {
         personal_buffs: Default::default(),
         personal_damage_mods: Default::default(),
         log_errors,
-        combat_replay_meta_data: None,
-        wvw_map_data: None,
+        combat_replay_meta_data: crate::replay::meta_data(ctx),
+        wvw_map_data,
     })
 }
 
@@ -271,14 +278,6 @@ fn language_id(l: gw2ei_parse::Language) -> i64 {
         gw2ei_parse::Language::Spanish => 3,
         gw2ei_parse::Language::Missing | gw2ei_parse::Language::Unknown => 0,
     }
-}
-
-fn team_guid(ctx: &Ctx, team_id: i64) -> Option<String> {
-    // TeamGUIDEvent(按 team id;事件流 scan:GuidTeam 无 team id 关联 ——
-    // P1 GuidTeam(content_id?) 无法直接映射 team id;团队 guid 通过
-    // GetWvWTeamsEvent 关联的 Guid 事件链 —— P2b 无该表,先 None。
-    let _ = (ctx, team_id);
-    None
 }
 
 // ===== 玩家构建 =====
@@ -573,6 +572,13 @@ pub fn build_player(
     }
     let is_englobed = log.agents.englobing_root(agent) != agent;
     let _ = dur;
+    // ---- P4:combatReplayData + minions(JsonActorBuilder.cs:57-61/103-106)----
+    let combat_replay_data = if crate::replay::can_combat_replay(ctx) {
+        Some(crate::replay::actor_cr_data(ctx, agent, &crate::replay::actor_icon(ctx, agent)))
+    } else {
+        None
+    };
+    let minions = crate::minions::build_minions(ctx, skills, cols, agent);
 
     JsonPlayer {
         account,
@@ -635,6 +641,8 @@ pub fn build_player(
         squad_buffs_active: buff_blocks.squad_buffs_active,
         conditions_states: buff_blocks.conditions_states,
         boons_states: buff_blocks.boons_states,
+        combat_replay_data,
+        minions,
     }
 }
 
@@ -755,6 +763,11 @@ pub fn build_npc(
     let health_percent_burned = 100.0 - hp_left;
     let total_health = b.total_health(agent);
     let breakbar_percents: Vec<Vec<f64>> = Vec::new();
+    let combat_replay_data = if crate::replay::can_combat_replay(ctx) {
+        Some(crate::replay::actor_cr_data(ctx, agent, &crate::replay::actor_icon(ctx, agent)))
+    } else {
+        None
+    };
     JsonNpc {
         id: i64::from(a.id),
         final_health: -1,
@@ -789,6 +802,10 @@ pub fn build_npc(
         barrier_percents,
         conditions_states: Vec::new(),
         boons_states: Vec::new(),
+        combat_replay_data,
+        // NPC 的 minions（C# FillJsonActor 的 GetMinions;伪 target 无 ——
+        // 敌 npc 的仆从聚合属 detailed WvW/PvE 面,不在本工程范围）。
+        minions: None,
     }
 }
 

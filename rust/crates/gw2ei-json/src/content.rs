@@ -5,7 +5,7 @@
 //! 对应 C#:BuffsContainer.cs + GW2APIController(GetSpec/GetAPISkill) +
 //! SkillItemOverrides.cs + SkillData(仅名字面)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use gw2ei_model::Spec;
@@ -186,6 +186,56 @@ pub struct SkillOverrides {
     pub non_critable: BTreeMap<i64, u64>,
 }
 
+/// 图标资产（icons.json，extract-icons.py 从 ParserIcons.cs 抽取；P4 CR
+/// per-actor iconURL 用）。
+#[derive(Debug, Clone, Default)]
+pub struct Icons {
+    /// spec 名（`Spec.ToString`/csharp_name）→ BaseResProfIcons URL。
+    pub prof: BTreeMap<String, String>,
+    /// 物种 id → TargetNPCIcons URL。
+    pub target: BTreeMap<i64, String>,
+    /// 物种 id → MinionNPCIcons URL。
+    pub minion: BTreeMap<i64, String>,
+    pub fallback_prof: String,
+    pub fallback_gadget: String,
+    pub fallback_npc_unknown: String,
+    pub fallback_npc_generic: String,
+    /// Ranger 幼宠物种（RangerHelper.JuvenilePetIDs）—— minions
+    /// `IsUniquePerTimeFrame` 的 JuvenilPet 判据。
+    pub ranger_juvenile: BTreeSet<i64>,
+    /// known-minion 门控集（Ranger 基专精 = Juvenile+SpiritIDs;
+    /// Mesmer 基专精 = _clones+_phantasms）—— `Minions.IsActive` 判据。
+    pub ranger_known: BTreeSet<i64>,
+    pub mesmer_known: BTreeSet<i64>,
+}
+
+impl Icons {
+    /// `ParserHelper.GetProfIcon(Spec)`（BaseResProfIcons；表外
+    /// UnknownProfessionIcon）。
+    pub fn prof_of(&self, spec_name: &str) -> &str {
+        self.prof
+            .get(spec_name)
+            .map(String::as_str)
+            .unwrap_or(&self.fallback_prof)
+    }
+
+    /// `ParserHelper.GetNPCIcon(int)`（NPC.cs:88-91）：
+    /// id==0 → UnknownNPCIcon；TargetID 命中 → 表内 URL 或 GenericEnemy；
+    /// MinionID 命中 → 同上；其余 GenericEnemy。
+    pub fn npc_of(&self, id: i32) -> &str {
+        if id == 0 {
+            return &self.fallback_npc_unknown;
+        }
+        if let Some(url) = self.target.get(&i64::from(id)) {
+            return url;
+        }
+        if let Some(url) = self.minion.get(&i64::from(id)) {
+            return url;
+        }
+        &self.fallback_npc_generic
+    }
+}
+
 // ===== Content 总装 =====
 
 /// 资产加载产物(不可变;加载一次复用)。
@@ -198,6 +248,8 @@ pub struct Content {
     pub map_names: BTreeMap<i64, String>,
     /// instant-cast finder 表(extract-instant-casts.py 产物;P3b 引擎输入)。
     pub instant_finders: serde_json::Value,
+    /// P4 CR 图标资产(icons.json)。
+    pub icons: Icons,
 }
 
 #[derive(Debug, Clone)]
@@ -550,8 +602,62 @@ pub fn load_default_content(content_dir: &Path) -> Result<Content, BuildError> {
         )
         .map_err(|e| BuildError::Content(format!("parse {p:?}: {e}")))?;
     }
+    // P4 CR 图标(extract-icons.py 从 ParserIcons.cs 抽取)
+    {
+        let p = content_dir.join("icons.json");
+        let v: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&p)
+                .map_err(|e| BuildError::Content(format!("read {p:?}: {e}")))?,
+        )
+        .map_err(|e| BuildError::Content(format!("parse {p:?}: {e}")))?;
+        let fb = &v["fallback"];
+        c.icons = Icons {
+            prof: read_str_map(&v["prof"]),
+            target: read_i64_str_map(&v["target"]),
+            minion: read_i64_str_map(&v["minion"]),
+            fallback_prof: fb["prof"].as_str().unwrap_or("").to_string(),
+            fallback_gadget: fb["gadget"].as_str().unwrap_or("").to_string(),
+            fallback_npc_unknown: fb["npcUnknown"].as_str().unwrap_or("").to_string(),
+            fallback_npc_generic: fb["npcGeneric"].as_str().unwrap_or("").to_string(),
+            ranger_juvenile: read_i64_set(&v["uniqueMinions"]["rangerJuvenile"]),
+            ranger_known: read_i64_set(&v["uniqueMinions"]["rangerKnown"]),
+            mesmer_known: read_i64_set(&v["uniqueMinions"]["mesmerKnown"]),
+        };
+        if c.icons.fallback_prof.is_empty() {
+            return Err(BuildError::Content(format!("icons.json missing fallbacks ({p:?})")));
+        }
+    }
 
     Ok(c)
+}
+
+fn read_str_map(v: &serde_json::Value) -> BTreeMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn read_i64_set(v: &serde_json::Value) -> BTreeSet<i64> {
+    v.as_array()
+        .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+        .unwrap_or_default()
+}
+
+fn read_i64_str_map(v: &serde_json::Value) -> BTreeMap<i64, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, val)| {
+                    val.as_str()
+                        .and_then(|s| k.parse::<i64>().ok().map(|ik| (ik, s.to_string())))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `SkillItem.CanCrit`(SkillItem.cs:128-135):NonCritableSkills 覆盖表,

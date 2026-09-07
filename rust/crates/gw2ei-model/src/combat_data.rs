@@ -17,6 +17,7 @@ use crate::events::{
     TickEventFields, TickRateEventFields, UnsupportedEventKind,
     AttackTargetEventFields, ErrorEventFields, FractalScaleEventFields, Gw2BuildEventFields,
     InstanceStartEventFields, PointOfViewEventFields, WvWTeamsEventFields,
+    WvWObjectiveStatusEventFields,
 };
 
 /// Metadata 分桶（C# `CombatData._metaDataEvents` + `_rewardEvents`）。
@@ -58,6 +59,9 @@ pub struct MetaDataBucket {
     /// `EffectGUIDEventsByEffectID`，EffectGUIDEvent.cs:12-23；P3b 起 effect
     /// 事件化按此表解析 GUID/DefaultDuration）。
     pub effect_guid_by_effect_id: BTreeMap<i64, EffectGuidInfo>,
+    /// WvWObjectiveStatus 行聚合（P4；C# `_statusEvents.WvWObjectiveStatusEvents`，
+    /// 首现序、同 key owners 追加）。
+    pub wvw_objective_statuses: Vec<WvWObjectiveStatusEventFields>,
 }
 
 /// 按类别的事件计数（行级，含 metadata 单例/列表的全部产生行）。

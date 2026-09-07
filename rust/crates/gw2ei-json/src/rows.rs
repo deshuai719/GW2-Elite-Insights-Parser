@@ -291,6 +291,27 @@ pub struct BuffRemoveAllLine {
     pub kind: u8,
 }
 
+/// Movement 行种类（P4 CR 采样输入;C# MovementEvent 子类）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveKind {
+    Position,
+    Teleport,
+    Velocity,
+    Rotation,
+}
+
+/// Movement 行（坐标解包后的原始值;消费端过滤语义在 replay.rs —— C#
+/// PositionEvent/TeleportEvent 的 AddPoint3D 内 Drop 规则）。
+#[derive(Debug, Clone, Copy)]
+pub struct MoveLine {
+    pub ev: usize,
+    pub time: i64,
+    pub kind: MoveKind,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
 /// cast/weapon/buff 桶(补充 RowIndex;遍历同一 events)。
 #[derive(Debug, Clone, Default)]
 pub struct AuxIndex {
@@ -311,6 +332,8 @@ pub struct AuxIndex {
     pub health_update_rows: BTreeMap<AgentId, Vec<usize>>,
     pub barrier_update_rows: BTreeMap<AgentId, Vec<usize>>,
     pub max_health_rows: BTreeMap<AgentId, Vec<usize>>,
+    /// movement 行(Position/Rotation/Velocity/Teleport;P4 combatReplay 输入)。
+    pub movement_rows: BTreeMap<AgentId, Vec<MoveLine>>,
 }
 
 impl AuxIndex {
@@ -397,9 +420,47 @@ impl AuxIndex {
                 CombatEvent::HealthUpdate(_) => push(&mut idx.health_update_rows, from, i),
                 CombatEvent::BarrierUpdate(_) => push(&mut idx.barrier_update_rows, from, i),
                 CombatEvent::MaxHealthUpdate(_) => push(&mut idx.max_health_rows, from, i),
+                CombatEvent::Position(f) => push_move(&mut idx.movement_rows, MoveLine {
+                    ev: i,
+                    time: f.base.time,
+                    kind: MoveKind::Position,
+                    x: f.x,
+                    y: f.y,
+                    z: f.z,
+                }, from),
+                CombatEvent::Teleport(f) => push_move(&mut idx.movement_rows, MoveLine {
+                    ev: i,
+                    time: f.base.time,
+                    kind: MoveKind::Teleport,
+                    x: f.x,
+                    y: f.y,
+                    z: f.z,
+                }, from),
+                CombatEvent::Velocity(f) => push_move(&mut idx.movement_rows, MoveLine {
+                    ev: i,
+                    time: f.base.time,
+                    kind: MoveKind::Velocity,
+                    x: f.x,
+                    y: f.y,
+                    z: f.z,
+                }, from),
+                CombatEvent::Rotation(f) => push_move(&mut idx.movement_rows, MoveLine {
+                    ev: i,
+                    time: f.base.time,
+                    kind: MoveKind::Rotation,
+                    x: f.x,
+                    y: f.y,
+                    z: f.z,
+                }, from),
                 _ => {}
             }
         }
         idx
+    }
+}
+
+fn push_move(map: &mut BTreeMap<AgentId, Vec<MoveLine>>, l: MoveLine, k: AgentId) {
+    if k != NO_AGENT {
+        map.entry(k).or_default().push(l);
     }
 }
