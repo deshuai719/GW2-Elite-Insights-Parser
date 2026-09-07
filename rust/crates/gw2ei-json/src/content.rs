@@ -173,6 +173,8 @@ pub struct ApiSkill {
     pub description: Option<String>,
     pub flags: Option<Vec<String>>,
     pub dual_wield: Option<String>,
+    /// API `bundle_skills`(Engineer kit 技能集;EngineerKitFinder 消费)。
+    pub bundle_skills: Option<Vec<i64>>,
 }
 
 /// skill-overrides.json(SkillItemOverrides.cs)。
@@ -194,6 +196,8 @@ pub struct Content {
     pub overrides: SkillOverrides,
     pub spec_by_id: BTreeMap<i64, SpecLine>,
     pub map_names: BTreeMap<i64, String>,
+    /// instant-cast finder 表(extract-instant-casts.py 产物;P3b 引擎输入)。
+    pub instant_finders: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -460,6 +464,9 @@ pub fn load_default_content(content_dir: &Path) -> Result<Content, BuildError> {
                         .as_array()
                         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()),
                     dual_wield: v["dual_wield"].as_str().map(String::from),
+                    bundle_skills: v["bundle_skills"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_i64()).collect()),
                 },
             );
         }
@@ -534,6 +541,16 @@ pub fn load_default_content(content_dir: &Path) -> Result<Content, BuildError> {
             }
         }
     }
+    // instant-cast finders(extract-instant-casts.py;P3b 合成引擎输入)
+    {
+        let p = content_dir.join("instant-cast-finders.json");
+        c.instant_finders = serde_json::from_str(
+            &std::fs::read_to_string(&p)
+                .map_err(|e| BuildError::Content(format!("read {p:?}: {e}")))?,
+        )
+        .map_err(|e| BuildError::Content(format!("parse {p:?}: {e}")))?;
+    }
+
     Ok(c)
 }
 

@@ -506,7 +506,26 @@ pub(crate) fn dispatch_state_change(c: &mut Collector<'_>, item: &EvtcCombatItem
                 content_id: item.skill_id,
             };
             let evt = match content {
-                ContentLocal::Effect => CombatEvent::GuidEffect(fields),
+                ContentLocal::Effect => {
+                    // P3b：effect GUID 表（C# EffectGUIDEventsByEffectID，
+                    // EffectGUIDEvent.cs:12-23）。DefaultDuration 由 BuffDmg
+                    // 的 f32 位型给出（arc ≥ EXTRA_DATA_IN_GUID_EVENTS），
+                    // 否则恒 -1（Dummy 语义）；GUID hex 恒登记（finder 的
+                    // GUID → EffectID 匹配用）。
+                    let default_duration = if c.build >= arc_builds::EXTRA_DATA_IN_GUID_EVENTS {
+                        f32::from_bits(item.buff_dmg as u32) as i64
+                    } else {
+                        -1
+                    };
+                    c.metadata.effect_guid_by_effect_id.insert(
+                        i64::from(item.skill_id as i32),
+                        EffectGuidInfo {
+                            guid_hex: fields.guid_hex(),
+                            default_duration,
+                        },
+                    );
+                    CombatEvent::GuidEffect(fields)
+                }
                 ContentLocal::Marker => CombatEvent::GuidMarker(fields),
                 ContentLocal::Skill => CombatEvent::GuidSkill(fields),
                 ContentLocal::Species => CombatEvent::GuidSpecies(fields),
@@ -522,17 +541,29 @@ pub(crate) fn dispatch_state_change(c: &mut Collector<'_>, item: &EvtcCombatItem
             c.counts.metadata_guid += 1;
             c.metadata.id_to_guid.push(evt);
         }
-        // ===== P1 未类型化（H 组等）：显式计数，不产生事件 =====
+        // ===== H 组子集：Effect（P3b；CombatEventFactory.cs:331-362 与
+        // 494-529 的 CBTS45/51 + Split 世代）。样本 arc 用 60-63 拆分形态
+        // （EffectGroundCreate/EffectAgentCreate/Remove；实测样例 30k 行）；
+        // 45/51 为旧世代 CBTS（保留实现）。
         S::Effect_45
         | S::Effect_51
         | S::EffectGroundCreate
         | S::EffectGroundRemove
         | S::EffectAgentCreate
-        | S::EffectAgentRemove => c.bump_unsupported(UnsupportedEventKind::Effect),
+        | S::EffectAgentRemove => dispatch_effect(c, item),
         S::Marker => c.bump_unsupported(UnsupportedEventKind::Marker),
         S::SquadMarker => c.bump_unsupported(UnsupportedEventKind::SquadMarker),
         S::Transformation => c.bump_unsupported(UnsupportedEventKind::Transformation),
-        S::MissileCreate | S::MissileLaunch | S::MissileRemove => {
+        // MissileCreate 事件化(P3b finder 触发面;MissileEvent.cs);
+        // Launch/Remove 的配对/命中消费在 P3c。
+        S::MissileCreate => {
+            c.events.push(CombatEvent::Missile(MissileEventFields {
+                time: item.time,
+                src: item.src_agent,
+                skill_id: item.skill_id,
+            }));
+        }
+        S::MissileLaunch | S::MissileRemove => {
             c.bump_unsupported(UnsupportedEventKind::Missile)
         }
         S::WvWObjectiveStatus => c.bump_unsupported(UnsupportedEventKind::WvWObjectiveStatus),
@@ -752,4 +783,177 @@ fn buff_formula_row(item: &EvtcCombatItem) -> BuffFormulaRowFields {
 /// `Math.Round(x, 2)`（banker's rounding，C# 默认 ToEven）。
 fn round_hundredth(value: f64) -> f64 {
     (value * 100.0).round_ties_even() / 100.0
+}
+
+// ===== H 组子集：Effect CBTS45/51（P3b）=====
+
+/// Effect_45/Effect_51 行事件化（CombatEventFactory.cs:331-362 +
+/// EffectEvents/NonSplit 构造语义）。
+///
+/// - end 行（SkillID==0）：CBTS45 直接丢弃；CBTS51 构造
+///   `EffectEndEventCBTS51`（按 TrackingID 把 end time 写进最近一个
+///   start 事件，仅一次 —— SetDynamicEndTime）。
+/// - start 行：CBTS51 的 Duration/TrackingID 由行偏移 48-59 的原始字节
+///   重拼（EffectEventCBTS51.cs ReadDuration/ReadTrackingID），Duration
+///   为 0 时按 GUID 事件 DefaultDuration 兜底；CBTS45 无 duration/
+///   tracking（EffectEventCBTS45.cs）。
+/// - `OnNonStaticPlatform`（IsFlanking>0）在 Release 构建直接丢弃
+///   （`#if !DEBUG` 段），CLI 基准即 Release —— Rust 恒丢。
+/// - 位置：DstAgent != 0 → `IsAroundDst`（dst 承载）；否则 Value/BuffDmg/
+///   OverstackValue 三个 f32（NonSplitEffectEvent.cs:9-16）。
+fn dispatch_effect(c: &mut Collector<'_>, item: &EvtcCombatItem) {
+    use StateChange as S;
+    // ---- Split 世代(60-63;样本实测形态;CombatEventFactory.cs:494-529)----
+    // EffectGroundCreate/EffectAgentCreate:EffectID=SkillID、TrackingID=Pad、
+    // Duration 由偏移 48-51 四字节(SplitEffectEvent.cs ReadDuration)、GUID
+    // DefaultDuration 兜底;AgentCreate 的 DstAgent=承载 agent(IsAroundDst)。
+    // GroundRemove/AgentRemove:end 行(TrackingID=Pad),按各自桶配对。
+    match item.state_change {
+        S::EffectGroundRemove => {
+            let tracking = item.pad;
+            if tracking != 0
+                && let Some(list) = c.split_ground_by_tracking.get(&tracking)
+                && let Some(&idx) = list.last()
+                && let CombatEvent::Effect(f) = &mut c.events[idx]
+                && f.end_time.is_none()
+            {
+                f.end_time = Some(item.time);
+            }
+            return;
+        }
+        S::EffectAgentRemove => {
+            let tracking = item.pad;
+            if tracking != 0
+                && let Some(list) = c.split_agent_by_tracking.get(&tracking)
+                && let Some(&idx) = list.last()
+                && let CombatEvent::Effect(f) = &mut c.events[idx]
+                && f.end_time.is_none()
+            {
+                f.end_time = Some(item.time);
+            }
+            return;
+        }
+        S::EffectGroundCreate | S::EffectAgentCreate => {
+            let is_agent = item.state_change == S::EffectAgentCreate;
+            let duration_raw =
+                u32::from_le_bytes([item.iff_raw, item.buff, item.result, item.activation_raw]);
+            let mut duration = i64::from(duration_raw);
+            let eid = i64::from(item.skill_id as i32);
+            if duration == 0
+                && let Some(info) = c.metadata.effect_guid_by_effect_id.get(&eid)
+                && info.default_duration > 0
+            {
+                duration = info.default_duration.min(i64::from(i32::MAX));
+            }
+            if item.is_flanking > 0 {
+                // OnNonStaticPlatform:Release 丢弃(公共段 #if !DEBUG)
+                return;
+            }
+            // Ground 位置:DstAgent(8B)+Value(4B) 六字节 → 3 short × 10;
+            // Agent 位置无效(IsAroundDst)。
+            let position = if is_agent {
+                (0.0f32, 0.0f32, 0.0f32)
+            } else {
+                let mut b = [0u8; 12];
+                b[..8].copy_from_slice(&item.dst_agent.to_le_bytes());
+                b[8..12].copy_from_slice(&(item.value as u32).to_le_bytes());
+                let s0 = i16::from_le_bytes([b[0], b[1]]);
+                let s1 = i16::from_le_bytes([b[2], b[3]]);
+                let s2 = i16::from_le_bytes([b[4], b[5]]);
+                (
+                    f32::from(s0) * 10.0,
+                    f32::from(s1) * 10.0,
+                    f32::from(s2) * 10.0,
+                )
+            };
+            let idx = c.events.len();
+            c.events.push(CombatEvent::Effect(EffectEventFields {
+                time: item.time,
+                src: item.src_agent,
+                dst: if is_agent { item.dst_agent } else { 0 },
+                effect_id: item.skill_id,
+                duration,
+                end_time: None,
+                tracking_id: item.pad,
+                cbts45: false,
+                position,
+            }));
+            let tracking = item.pad;
+            if tracking != 0 {
+                if is_agent {
+                    c.split_agent_by_tracking.entry(tracking).or_default().push(idx);
+                } else {
+                    c.split_ground_by_tracking.entry(tracking).or_default().push(idx);
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+    let cbts45 = item.state_change == StateChange::Effect_45;
+    if item.skill_id == 0 {
+        // CBTS45 的 end 不支持直接 return;CBTS51 end(EffectEndEventCBTS51:
+        // TrackingID 由 52-55 四字节拼)。
+        if !cbts45 {
+            let tracking =
+                u32::from_le_bytes([item.buff_remove_raw, item.is_ninety, item.is_fifty, item.is_moving]);
+            if tracking != 0
+                && let Some(list) = c.effect_starts_by_tracking.get(&tracking)
+                && let Some(&idx) = list.last()
+                && let CombatEvent::Effect(f) = &mut c.events[idx]
+                && f.end_time.is_none()
+            {
+                f.end_time = Some(item.time);
+            }
+        }
+        return;
+    }
+    let duration_raw =
+        u32::from_le_bytes([item.iff_raw, item.buff, item.result, item.activation_raw]);
+    let tracking =
+        u32::from_le_bytes([item.buff_remove_raw, item.is_ninety, item.is_fifty, item.is_moving]);
+    let mut duration = i64::from(duration_raw);
+    // GUID 表兜底(仅 CBTS51;Dummy GUID 的 DefaultDuration = -1 不覆盖)
+    if !cbts45 && duration == 0 {
+        let eid = i64::from(item.skill_id as i32);
+        if let Some(info) = c.metadata.effect_guid_by_effect_id.get(&eid)
+            && info.default_duration > 0
+        {
+            duration = info.default_duration.min(i64::from(i32::MAX));
+        }
+    }
+    if item.is_flanking > 0 {
+        // OnNonStaticPlatform:Release 丢弃(CombatEventFactory.cs:347-351)
+        return;
+    }
+    let (dst, position) = if item.dst_agent != 0 {
+        (item.dst_agent, (0.0f32, 0.0f32, 0.0f32))
+    } else {
+        (
+            0,
+            (
+                f32::from_bits(item.value as u32),
+                f32::from_bits(item.buff_dmg as u32),
+                f32::from_bits(item.overstack_value),
+            ),
+        )
+    };
+    let idx = c.events.len();
+    c.events.push(CombatEvent::Effect(EffectEventFields {
+        time: item.time,
+        src: item.src_agent,
+        dst,
+        effect_id: item.skill_id,
+        duration,
+        end_time: None,
+        tracking_id: if cbts45 { 0 } else { tracking },
+        cbts45,
+        position,
+    }));
+    if !cbts45 && tracking != 0 {
+        c.effect_starts_by_tracking
+            .entry(tracking)
+            .or_default()
+            .push(idx);
+    }
 }

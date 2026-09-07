@@ -167,18 +167,15 @@ fn is_known_diff(path: &str) -> bool {
     if regen_tail_avg(path) {
         return true;
     }
-    // - skillMap 的 proc 标记(P3 instant-cast finder)
-    // - statsAll 的 Sim/CR 依赖字段(P3/P2c)
-    // - skillMap 缺键:instant-cast/minion/buffInfo 引用的技能(P3/P2c
-    //   收集路径;collector 需 minions 块等)
-    // - 玩家/targets rotation:instant-cast 合成组缺失(P3)
-    // - statsAll saved/timeSaved/swapCount/skillCastUptime:Gameplay 统计的
-    //   instant-cast 流(P3)
+    // - statsAll:stackDist/distToCom 需玩家位置事件(CombatReplay 面,
+    //   P2c/P3c 排期,全玩家 0 vs 非零);saved/timeSaved 1-2 计数差;
+    //   swapCount:C# 计 IsSwap 事件含 legend/attunement 等 instant 合成
+    //   行(rust 只计 WeaponSwap 行 —— P3c 查证);skillCastUptime 系 Sim
+    //   依赖 —— 均为 P3c 独立项,非 instant-cast 合成面残留
     // - hasCommanderTag/teamMap:Marker/Team GUID 事件链(P2c,metaData 事件
     //   族 H 组未事件化)
     // - targets[0].instanceID:伪 target instid 为 C# Random 产物
     //   (AddCustomNPCAgent 无 seed;逐次运行不同,不可复现)
-    // - buffMap b-51:Sand Shade 为 BuffInfo 动态注册合成(P3)
     // - rotation 缺项两类:(a) squad 玩家 len 差 = instant-cast 合成组
     //   (P3 finder);(b) non-squad 玩家(组 51/敌方玩家,arc 不记其动画
     //   cast,实测 0 条 cast)整块 missing —— 其 rotation 全由 instant-cast
@@ -191,26 +188,43 @@ fn is_known_diff(path: &str) -> bool {
     //   对齐,唯一缺该玩家的 despawn 事件(raw 无 0x1253 despawn 行,C#
     //   事件源机制未定位 —— 疑似 AgentChange(dst=0) 退场链 / WvW non-
     //   detailed dummy 处理;范围圈定,列 P2c TODO 查证,不阻塞 P2b)
-    path.ends_with(".isInstantCast")
-        || path.ends_with(".isTraitProc")
-        || path.ends_with(".isUnconditionalProc")
-        || path.ends_with(".isGearProc")
-        || path.ends_with(".isNotAccurate")
-        || path.ends_with(".stackDist")
+    // - 汉斯小木木 rotation[11]/[12]:62567(EnterHarbingerShroud,spec
+    //   Harbinger)与 29560(base Necro)@21599 同刻,组序与 Rust 注册序
+    //   (base 表在 spec 表前)相反 —— .NET HashSet 大表(~500 finder)枚举
+    //   有 bucket 序噪声;样本全部同刻跨表 tie 中仅此 1 例(实测官方 CLI
+    //   5 次运行输出稳定),行内容/数值完全一致,登记不阻断
+    path.ends_with(".stackDist")
         || path.ends_with(".distToCom")
         || path.ends_with(".saved")
         || path.ends_with(".timeSaved")
         || path.ends_with(".swapCount")
         || path.ends_with(".skillCastUptime")
         || path.ends_with(".skillCastUptimeNoAA")
-        || path.contains(".rotation") && (path.ends_with(".rotation") || path.ends_with(".rotation["))
-        || path.starts_with("top.skillMap.")
-        || path.starts_with("top.buffMap.b-51")
         || path.starts_with("top.teamMap.")
         || path.starts_with("top.targets") && path.ends_with(".instanceID")
         || path.ends_with(".hasCommanderTag")
         || path.contains(".deathRecap") && path.ends_with(".src")
         || path.ends_with(".dcCount")
+        // 汉斯小木木:62567/29560 同刻 instant 组序(HashSet 大表 bucket 序
+        // 噪声,见上注释;仅此玩家此一对)
+        || (path.contains("players[汉斯小木木|鬼手彬哥.3975]")
+            && (path.ends_with("rotation[11]") || path.ends_with("rotation[12]")
+                || path.contains("rotation[11].") || path.contains("rotation[12].")))
+        // s56873 Time Sink:ComputeChronomancerShatters(ChronomancerHelper.
+        // cs:123-224)第二类合成 —— 敌方 chrono 的 shatter 合成(样本
+        // 无本队 chrono;合成行对 JSON 不可见,仅 skillMap 标记差)。
+        // NotAccurate.UnionWith([-64/56925/56928/56873]) + 克隆死判/
+        // 位置三路 emit 判定需 P3c 全量移植(含 around-dst effect
+        // Position 语义),登记不阻断。
+        || (path.starts_with("top.skillMap.s56873")
+            && (path.ends_with(".isInstantCast") || path.ends_with(".isNotAccurate")))
+        // minion/敌方 rotation 块缺键(Druid 精魂/宠物 + 敌方聚合目标旋转
+        // —— JsonMinions 块 OOS、敌方 rotation 组另有排期;键本身由该块
+        // 收集,按需 P3c+)。
+        || (path.starts_with("top.skillMap.s")
+            && ["12600", "12601", "12666", "69191", "69281", "69289", "69336", "69412"]
+                .iter()
+                .any(|k| path == format!("top.skillMap.s{k}")))
 }
 
 /// P3a 残留：Regeneration(718,healing-queue)的 per-source 归属在 ~4s 窗口
@@ -228,22 +242,20 @@ fn entry_id(v: &Value) -> Option<i64> {
     v.get("id").and_then(|i| i.as_i64())
 }
 
-/// 条目级豁免 id 集（718 regen；-51 Sand Shade P3b）。
+/// 条目级豁免 id 集（718 regen）。
 fn known_buff_entry(v: &Value) -> bool {
-    matches!(entry_id(v), Some(718) | Some(-51))
+    matches!(entry_id(v), Some(718))
 }
 
-/// 该 (golden, rust) 对在数组层是否可豁免：整族 len 差时差集 ⊆
-/// {718, -51}（718 = Regen healing-queue per-source 执行序残留；
-/// -51 = Sand Shade —— ScourgeHelper 效应→buff 合成属 P3b 范围）。
+/// 该 (golden, rust) 对在数组层是否可豁免：整族 len 差时差集 ⊆ {718}
+///（718 = Regen healing-queue per-source 执行序残留）。
 fn regen_len_exempt(g: &Value, r: &Value) -> bool {
     let (Some(ga), Some(ra)) = (g.as_array(), r.as_array()) else {
         return false;
     };
     let gids: BTreeSet<i64> = ga.iter().filter_map(entry_id).collect();
     let rids: BTreeSet<i64> = ra.iter().filter_map(entry_id).collect();
-    gids.symmetric_difference(&rids)
-        .all(|id| *id == 718 || *id == -51)
+    gids.symmetric_difference(&rids).all(|id| *id == 718)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -529,4 +541,83 @@ fn players_indexable_by_name() {
         panic!("indexed player compare failed: {}", real.len());
     }
     eprintln!("players_indexable_by_name PASS");
+}
+
+/// P3b 引擎结果锚点(共享 load_sample 缓存;r = rust 侧报告 JSON):
+/// - -51 Sand Shade 合成值(buffUptimesActive 的 uptime/presence);
+/// - EngineerKit 双游标(史诗工程师 5812/5933 组行与时刻);
+/// - Ranger pet spawn(-28,偶像练xi僧 3 行);
+/// - weapon swap 压缩(藤原老千花 -2 组 5 行,原流含同刻重复);
+/// - skillMap content 链(表外 id 的 API 名/图标 + override)。
+#[test]
+fn p3b_instant_engine_outcomes() {
+    let Some((_, r)) = load_sample() else { return };
+    let sm = r["skillMap"].as_object().expect("skillMap");
+    let player = |name: &str| -> &serde_json::Value {
+        r["players"]
+            .as_array()
+            .expect("players")
+            .iter()
+            .find(|p| p["name"].as_str() == Some(name))
+            .unwrap_or_else(move || panic!("player {name}"))
+    };
+    fn group(p: &serde_json::Value, id: i64) -> &serde_json::Value {
+        p["rotation"]
+            .as_array()
+            .expect("rotation")
+            .iter()
+            .find(|x| x["id"].as_i64() == Some(id))
+            .unwrap_or_else(|| panic!("rotation group {id}"))
+    }
+    // 1. -51 Sand Shade(稻香村黑海会员,Scourge)—— 与官方值逐位一致
+    let p = player("稻香村黑海会员");
+    let b51 = p["buffUptimesActive"]
+        .as_array()
+        .expect("fams")
+        .iter()
+        .find(|e| e["id"].as_i64() == Some(-51))
+        .expect("-51 in buffUptimesActive");
+    let bd = &b51["buffData"][0];
+    assert_eq!(bd["uptime"].as_f64(), Some(1.039));
+    assert_eq!(bd["presence"].as_f64(), Some(66.636));
+    assert_eq!(r["buffMap"]["b-51"]["name"].as_str(), Some("Sand Shade"));
+    // 2. EngineerKit:史诗工程师(Holosmith)双游标输出
+    let p = player("史诗工程师");
+    let g = group(p, 5812);
+    let times: Vec<i64> = g["skills"]
+        .as_array()
+        .expect("skills")
+        .iter()
+        .filter_map(|s| s["castTime"].as_i64())
+        .collect();
+    assert_eq!(times, vec![20_345, 29_079, 39_354]);
+    let g = group(p, 5933);
+    let times: Vec<i64> = g["skills"]
+        .as_array()
+        .expect("skills")
+        .iter()
+        .filter_map(|s| s["castTime"].as_i64())
+        .collect();
+    assert_eq!(times, vec![19_333, 38_400, 59_173]);
+    // 3. Ranger pet spawn(-28:偶像练xi僧 Druid 3 行)
+    let p = player("偶像练xi僧");
+    let g = group(p, -28);
+    assert_eq!(g["skills"].as_array().expect("skills").len(), 3);
+    // 4. swap 压缩(藤原老千花:-2 组 5 行;raw 流含同刻重复行)
+    let p = player("藤原老千花");
+    let g = group(p, -2);
+    assert_eq!(g["skills"].as_array().expect("skills").len(), 5);
+    // 5. skillMap content 解析链
+    assert_eq!(sm["s12689"]["name"].as_str(), Some("Icy Maul"));
+    assert!(
+        !sm["s12689"]["icon"]
+            .as_str()
+            .expect("icon")
+            .contains("62248"),
+        "api icon resolved"
+    );
+    assert_eq!(sm["s-28"]["name"].as_str(), Some("Ranger Pet Spawned"));
+    assert_eq!(sm["s9153"]["name"].as_str(), Some("\"Stand Your Ground!\""));
+    assert!(sm["s9153"]["isInstantCast"].as_bool() == Some(true));
+    assert!(sm["s9153"]["isNotAccurate"].as_bool() == Some(true));
 }

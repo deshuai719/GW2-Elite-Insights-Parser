@@ -37,6 +37,14 @@ pub const REGEN_BUFF_ID: i64 = 718;
 /// SkillIDs.NumberOfBoons / NumberOfConditions（伪图键）。
 pub const NUMBER_OF_BOONS: i64 = -3;
 pub const NUMBER_OF_CONDITIONS: i64 = -4;
+/// SkillIDs.SandShadeBuff / SandSavantSandShadeBuff（ScourgeHelper 合成）。
+const SAND_SHADE_BUFF: i64 = -51;
+const SAND_SAVANT_SAND_SHADE_BUFF: i64 = -52;
+/// EffectGUIDs.ScourgeShade / ScourgeShadeSandSavant（EffectGUIDs.cs:178-179）。
+const SHADE_GUIDS: [&str; 2] = [
+    "78408C6DA08C2746BEABEB995187271A",
+    "63F69C50B031A2469C5971744A9E003A",
+];
 /// ParserHelper.ServerDelayConstant（注入 RemoveAll 的偏移）。
 pub const SERVER_DELAY: i64 = 10;
 
@@ -246,6 +254,31 @@ fn build_actor(ctx: &Ctx<'_>, g: &Globals, actor: AgentId) -> ActorSims {
     let mut resolver = log.agents.clone();
     let mut despawn_times: Vec<i64> = Vec::new();
     let mut spawn_times: Vec<i64> = Vec::new();
+    // Scourge Sand Shade 合成（EIBuffParse:CombatData.cs:124-127 +
+    // ScourgeHelper.AddShadeBuffsFromEffects）:Spec==Scourge 的玩家按
+    // src 收 shade effect 行 → 每 effect 注入 BuffApply(-51/-52,
+    // addedActive=true,instance 递增)+ RemoveSingle(time+duration,
+    // removed=max(expected-duration,0),同 instance)。CBTS45 跳过。
+    let is_scourge = log
+        .agents
+        .slot(actor)
+        .is_some_and(|a| a.spec == gw2ei_model::Spec::Scourge);
+    // effect id → GUID 反查表（两 GUID 恒等;IDToGUID 表小）
+    let shade_eid: Vec<(i64, bool)> = if is_scourge {
+        log.metadata
+            .effect_guid_by_effect_id
+            .iter()
+            .filter_map(|(&eid, info)| {
+                SHADE_GUIDS
+                    .iter()
+                    .position(|g| *g == info.guid_hex)
+                    .map(|i| (eid, i == 1))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut shade_effects: Vec<(i64, i64, Option<i64>, bool)> = Vec::new();
     for (i, evt) in log.events.iter().enumerate() {
         match evt {
             CombatEvent::BuffApply(f) => {
@@ -267,6 +300,21 @@ fn build_actor(ctx: &Ctx<'_>, g: &Globals, actor: AgentId) -> ActorSims {
                         regen_override: None,
                     },
                 });
+            }
+            CombatEvent::Effect(f) if !shade_eid.is_empty() => {
+                // 只收集本 actor 为 src 的行（TryGetEffectEventsBySrcWithGUIDs）
+                let src = resolve_addr(&mut resolver, f.src, f.time);
+                if src != actor || f.cbts45 {
+                    continue;
+                }
+                let Some((_, is_savant)) = shade_eid
+                    .iter()
+                    .find(|(eid, _)| *eid == i64::from(f.effect_id))
+                    .copied()
+                else {
+                    continue;
+                };
+                shade_effects.push((f.time, f.duration, f.end_time, is_savant));
             }
             CombatEvent::BuffExtension(f) => {
                 let to = resolve_addr(&mut resolver, f.apply.base.to, f.apply.base.time);
@@ -363,6 +411,58 @@ fn build_actor(ctx: &Ctx<'_>, g: &Globals, actor: AgentId) -> ActorSims {
         }
     }
     // 1. rows 已按 ev 序（事件流 = 时间稳定序）
+    // Scourge shade 合成行（AddShadeBuffsFromEffects）:与真实行同按时间
+    // 序入桶 —— 缓冲 feed 只含本类行,追加尾部保序即可（ev: usize::MAX
+    // 占位,不进 dedup 判定）。
+    if !shade_effects.is_empty() {
+        let by = credited(&log.agents, actor);
+        // expectedDuration：WvW/sPvP 且 gw2Build >= October2019Balance
+        // (99526) → 15000（ScourgeHelper.cs:69-84；Rust 面只有 WvW 模式
+        // —— P4 encounter 展开时补 PvE 分支：July2023BalanceAndSilentSurfCM
+        // 起 8000 否则 20000）。样例 gw2Build=200968 命中 15000。
+        let expected: i64 = if ctx.meta.gw2_build >= 99_526 {
+            15_000
+        } else {
+            10_000
+        };
+        for (buff_instance, (time, _dur, end_time, is_savant)) in
+            (0_u32..).zip(shade_effects)
+        {
+            let duration = end_time
+                .map(|e| (e - time).min(expected))
+                .unwrap_or(expected);
+            let buff_id = if is_savant {
+                SAND_SAVANT_SAND_SHADE_BUFF
+            } else {
+                SAND_SHADE_BUFF
+            };
+            rows.push(Row {
+                ev: usize::MAX,
+                time,
+                by,
+                buff_id,
+                kind: RowKind::Apply {
+                    instance: buff_instance,
+                    applied: duration,
+                    original: duration,
+                    initial: false,
+                    added_active: true,
+                    regen_override: None,
+                },
+            });
+            rows.push(Row {
+                ev: usize::MAX,
+                time: time + duration,
+                by,
+                buff_id,
+                kind: RowKind::RemoveSingle {
+                    instance: buff_instance,
+                    removed: (expected - duration).max(0),
+                    overstack_or_natural_end: false,
+                },
+            });
+        }
+    }
     offset_extensions(g, &mut rows);
     try_find_src(ctx, g, actor, &mut rows);
     // 2. 清洗 + 注入 + 排序 + 仿真

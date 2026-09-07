@@ -11,6 +11,7 @@ pub mod buffsim;
 pub mod build;
 pub mod content;
 pub mod ctx;
+pub mod instant;
 pub mod json_buffs;
 pub mod dto_a;
 pub mod dto_b;

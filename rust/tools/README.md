@@ -7,10 +7,16 @@
 # 在 EI fork 仓库根下(脚本参数 = GW2EIEvtcParser 目录)
 python rust/tools/extract-skill-overrides.py GW2EI.Library/GW2EI.Services/GW2EIEvtcParser
 python rust/tools/extract-buff-table.py     GW2EI.Library/GW2EI.Services/GW2EIEvtcParser
+# instant-cast finder 表(P3b;参数 = fork 仓库根,与 rust/ 同级)
+python rust/tools/extract-instant-casts.py
 # SkillList/SpecList/MapList.json:EI CLI publish 产物自带
 # (GW2EIParserCommons/Content/*.json),直接拷贝
 ```
 
 脚本输入为 C# 源码快照(当前锚定 `3b7278f9b`);上游更新后重跑可刷新。
+`extract-instant-casts.py` 解析 ProfHelpers 的 `InstantCastFinder` 表(通用表 +
+按日志 spec 出现的 Helper;`HELPERS` 字典为抽取清单,扩展职业时在此追加),
+常量解析 SkillIDs/EffectGUIDs/GW2Builds/SpeciesIDs;lambda checker 结构化翻译
+进 `LambdaCond`,无法翻译的条目报 `unresolved`(0 时才是干净状态)。
 golden 基准 `rust/golden/*.json` 由 EI 官方 CLI 生成(`rust/tools/ei-golden.conf`),
 不入库;缺失时对拍测试自动 skip。

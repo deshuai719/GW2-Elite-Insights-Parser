@@ -11,9 +11,9 @@
 use std::collections::BTreeMap;
 
 use crate::events::{
-    BuffInfoEventFields, CombatEvent, GuildEventFields, LanguageEventFields, LogNpcUpdateEventFields,
-    MapChangeEventFields, MapIdEventFields, RewardEventFields, ShardEventFields,
-    SkillInfoEventFields, SquadCombatEndEventFields, SquadCombatStartEventFields,
+    BuffInfoEventFields, CombatEvent, EffectGuidInfo, GuildEventFields, LanguageEventFields,
+    LogNpcUpdateEventFields, MapChangeEventFields, MapIdEventFields, RewardEventFields,
+    ShardEventFields, SkillInfoEventFields, SquadCombatEndEventFields, SquadCombatStartEventFields,
     TickEventFields, TickRateEventFields, UnsupportedEventKind,
     AttackTargetEventFields, ErrorEventFields, FractalScaleEventFields, Gw2BuildEventFields,
     InstanceStartEventFields, PointOfViewEventFields, WvWTeamsEventFields,
@@ -54,6 +54,10 @@ pub struct MetaDataBucket {
     /// `metaDataEvents.*GUIDEventsBy*` 字典 —— P1 保留行级 + 计数，
     /// 反查索引 P2）。
     pub id_to_guid: Vec<CombatEvent>,
+    /// IDToGUID Effect 行的 effect id → GUID 信息（C#
+    /// `EffectGUIDEventsByEffectID`，EffectGUIDEvent.cs:12-23；P3b 起 effect
+    /// 事件化按此表解析 GUID/DefaultDuration）。
+    pub effect_guid_by_effect_id: BTreeMap<i64, EffectGuidInfo>,
 }
 
 /// 按类别的事件计数（行级，含 metadata 单例/列表的全部产生行）。

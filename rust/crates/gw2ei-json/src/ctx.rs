@@ -245,6 +245,8 @@ pub struct Ctx<'a> {
     pub map_id: i64,
     pub log_start: i64,
     pub log_end: i64,
+    /// P3b:instant-cast finder 合成(compute_cast 开关;build_report 计算)。
+    pub instants: crate::instant::InstantOut,
 }
 
 /// 主入口:日志(已组装 ParsedLog)+ 资产 → JsonLog。
@@ -276,6 +278,12 @@ pub fn build_report(log: &ParsedLog, content: &Content, opts: &BuildOptions) -> 
     let idx = gw2ei_model::build_event_index(log);
     let downs = DownMap::new(log, &idx);
     let map_id = meta.map_id_events.first().copied().unwrap_or(0);
+    // P3b:instant-cast 合成(引擎输入 = events/agents + finder 表)
+    let instants = if opts.compute_cast {
+        crate::instant::compute_instants(log, content, meta.gw2_build, &content.instant_finders)
+    } else {
+        crate::instant::InstantOut::default()
+    };
     let ctx = Ctx {
         log,
         content,
@@ -290,6 +298,7 @@ pub fn build_report(log: &ParsedLog, content: &Content, opts: &BuildOptions) -> 
         map_id,
         log_start,
         log_end,
+        instants,
     };
     crate::build::build_json(&ctx)
 }

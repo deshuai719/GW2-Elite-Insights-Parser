@@ -562,7 +562,56 @@ pub fn buffs_insert(ctx: &Ctx, cols: &mut Collectors, id: i64) {
     let _ = ctx;
 }
 
-// ===== rotation(JsonRotationBuilder;P1 cast 部分)=====
+// ===== rotation(JsonRotationBuilder;P1 cast + P3b instant 部分)=====
+
+/// rotation 合并行:事件行(animated/emote/gadget/bundle/weapon swap)+
+/// instant-cast 合成行(P3b)。C# `InitCastEvents`(SingleActor.cs:599-618):
+/// animated + instant 先入,weapon swaps 随后;SortByTimeThenNegatedSwap
+/// 稳定序(同刻 swap 靠后)。
+#[derive(Debug, Clone, Copy)]
+pub enum CastRef {
+    Ev(usize),
+    Instant { time: i64, skill_id: i64 },
+}
+
+impl CastRef {
+    pub fn time(&self, log: &ParsedLog) -> Option<i64> {
+        match self {
+            CastRef::Ev(i) => log.events[*i].time(),
+            CastRef::Instant { time, .. } => Some(*time),
+        }
+    }
+    pub fn is_swap(&self, log: &ParsedLog) -> bool {
+        matches!(self, CastRef::Ev(i) if matches!(&log.events[*i], CombatEvent::WeaponSwap(_)))
+    }
+    /// (time, actual_duration)。
+    pub fn span(&self, log: &ParsedLog) -> (i64, i64) {
+        match self {
+            CastRef::Ev(i) => match &log.events[*i] {
+                CombatEvent::AnimatedCast(f) => (f.time, i64::from(f.actual_duration)),
+                CombatEvent::Emote(f) => (f.base.time, i64::from(f.base.actual_duration)),
+                CombatEvent::GadgetInteract(f) => (f.time, i64::from(f.actual_duration)),
+                CombatEvent::BundlePickUp(f) => (f.base.time, i64::from(f.base.actual_duration)),
+                CombatEvent::WeaponSwap(f) => (f.time, 0),
+                _ => (0, 0),
+            },
+            CastRef::Instant { time, .. } => (*time, 0),
+        }
+    }
+    pub fn skill_id(&self, log: &ParsedLog) -> i64 {
+        match self {
+            CastRef::Ev(i) => crate::signed_id(match &log.events[*i] {
+                CombatEvent::WeaponSwap(_) => WEAPON_SWAP_ID as u32,
+                CombatEvent::AnimatedCast(f) => f.skill_id,
+                CombatEvent::Emote(f) => f.base.skill_id,
+                CombatEvent::GadgetInteract(f) => f.skill_id,
+                CombatEvent::BundlePickUp(f) => f.base.skill_id,
+                _ => 0,
+            }),
+            CastRef::Instant { skill_id, .. } => *skill_id,
+        }
+    }
+}
 
 /// GetIntersectingCastEvents + GroupBy(SkillID);每 cast 一行 JsonSkill。
 pub fn build_rotation(
@@ -571,46 +620,31 @@ pub fn build_rotation(
     end: i64,
     skills: &SkillTable,
     cols: &mut Collectors,
-    cast_rows: &[usize],
+    cast_refs: &[CastRef],
 ) -> Option<Vec<JsonRotation>> {
     let log = b.ctx.log;
-    let mut keep: Vec<usize> = Vec::new();
-    for &i in cast_rows {
-        let evt = &log.events[i];
-        let (time, actual) = match evt {
-            CombatEvent::AnimatedCast(f) => (f.time, i64::from(f.actual_duration)),
-            CombatEvent::Emote(f) => (f.base.time, i64::from(f.base.actual_duration)),
-            CombatEvent::GadgetInteract(f) => (f.time, i64::from(f.actual_duration)),
-            CombatEvent::BundlePickUp(f) => (f.base.time, i64::from(f.base.actual_duration)),
-            CombatEvent::WeaponSwap(f) => (f.time, 0),
-            _ => continue,
-        };
+    let mut keep: Vec<CastRef> = Vec::new();
+    for &cr in cast_refs {
+        let (time, actual) = cr.span(log);
         let end_time = time + actual;
         let inside = (time >= start && time <= end)
             || (end_time >= start && end_time <= end)
             || (time <= start && end_time >= end);
         if inside {
-            keep.push(i);
+            keep.push(cr);
         }
     }
     // cast 合成序:时间升序、同刻 swap 靠后(C# SortByTimeThenNegatedSwap)
-    keep.sort_by_key(|&i| (log.events[i].time().unwrap_or(0), is_swap_kind(log, i)));
+    keep.sort_by_key(|cr| (cr.time(log).unwrap_or(0), cr.is_swap(log)));
     if keep.is_empty() {
         return None;
     }
-    let mut groups: Vec<(i64, Vec<usize>)> = Vec::new();
-    for &i in &keep {
-        let id = crate::signed_id(match &log.events[i] {
-            CombatEvent::WeaponSwap(_) => WEAPON_SWAP_ID as u32,
-            CombatEvent::AnimatedCast(f) => f.skill_id,
-            CombatEvent::Emote(f) => f.base.skill_id,
-            CombatEvent::GadgetInteract(f) => f.skill_id,
-            CombatEvent::BundlePickUp(f) => f.base.skill_id,
-            _ => 0,
-        });
+    let mut groups: Vec<(i64, Vec<CastRef>)> = Vec::new();
+    for &cr in &keep {
+        let id = cr.skill_id(log);
         match groups.iter_mut().find(|(g, _)| *g == id) {
-            Some((_, v)) => v.push(i),
-            None => groups.push((id, vec![i])),
+            Some((_, v)) => v.push(cr),
+            None => groups.push((id, vec![cr])),
         }
     }
     let mut out: Vec<JsonRotation> = Vec::new();
@@ -618,41 +652,43 @@ pub fn build_rotation(
         skills_insert(skills, cols, *id);
         let skills_json = casts
             .iter()
-            .map(|&i| {
-                let evt = &log.events[i];
-                let (time, actual, saved, accel, status) = match evt {
-                    CombatEvent::AnimatedCast(f) => (
-                        f.time,
-                        i64::from(f.actual_duration),
-                        i64::from(f.saved_duration),
-                        f.acceleration,
-                        f.status,
-                    ),
-                    CombatEvent::Emote(f) => (
-                        f.base.time,
-                        i64::from(f.base.actual_duration),
-                        i64::from(f.base.saved_duration),
-                        f.base.acceleration,
-                        f.base.status,
-                    ),
-                    CombatEvent::GadgetInteract(f) => (
-                        f.time,
-                        i64::from(f.actual_duration),
-                        i64::from(f.saved_duration),
-                        f.acceleration,
-                        f.status,
-                    ),
-                    CombatEvent::BundlePickUp(f) => (
-                        f.base.time,
-                        i64::from(f.base.actual_duration),
-                        i64::from(f.base.saved_duration),
-                        f.base.acceleration,
-                        f.base.status,
-                    ),
-                    CombatEvent::WeaponSwap(f) => (f.time, 0, 0, 0.0, gw2ei_model::AnimationStatus::Unknown),
-                    _ => (0, 0, 0, 0.0, gw2ei_model::AnimationStatus::Unknown),
+            .map(|&cr| {
+                let (time, actual, saved, accel) = match cr {
+                    CastRef::Ev(i) => {
+                        let evt = &log.events[i];
+                        match evt {
+                            CombatEvent::AnimatedCast(f) => (
+                                f.time,
+                                i64::from(f.actual_duration),
+                                i64::from(f.saved_duration),
+                                f.acceleration,
+                            ),
+                            CombatEvent::Emote(f) => (
+                                f.base.time,
+                                i64::from(f.base.actual_duration),
+                                i64::from(f.base.saved_duration),
+                                f.base.acceleration,
+                            ),
+                            CombatEvent::GadgetInteract(f) => (
+                                f.time,
+                                i64::from(f.actual_duration),
+                                i64::from(f.saved_duration),
+                                f.acceleration,
+                            ),
+                            CombatEvent::BundlePickUp(f) => (
+                                f.base.time,
+                                i64::from(f.base.actual_duration),
+                                i64::from(f.base.saved_duration),
+                                f.base.acceleration,
+                            ),
+                            // WeaponSwapEvent(cast 流中的 duration 0)
+                            CombatEvent::WeaponSwap(f) => (f.time, 0, 0, 0.0),
+                            _ => (0, 0, 0, 0.0),
+                        }
+                    }
+                    // InstantCastEvent:ActualDuration/Saved/Acceleration = 0
+                    CastRef::Instant { time, .. } => (time, 0, 0, 0.0),
                 };
-                let _ = status;
                 JsonSkill {
                     cast_time: time,
                     duration: actual,
@@ -667,8 +703,10 @@ pub fn build_rotation(
     Some(out)
 }
 
-fn is_swap_kind(log: &ParsedLog, i: usize) -> bool {
-    matches!(log.events[i], CombatEvent::WeaponSwap(_))
+
+/// 事件行是否为 WeaponSwap(CastRef 的 is_swap 等价;estimate_weapons 用)。
+pub fn is_swap_kind(log: &ParsedLog, i: usize) -> bool {
+    matches!(&log.events[i], CombatEvent::WeaponSwap(_))
 }
 
 // ===== weaponSets(EstimateWeapons)=====

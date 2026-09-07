@@ -452,13 +452,36 @@ pub fn build_player(
     let active_times = vec![b.active_duration(agent, start, end)];
 
     // ---- rotation / weapons ----
-    let mut cast_rows = cast_rows_of(ctx, agent);
+    let cast_rows = cast_rows_of(ctx, agent);
     // C# GetIntersectingCastEvents(JsonActorBuilder.cs:57)含武器切换事件
     // (WeaponSwapEvent 属 CastEvent)→ rotation 的 -2 组。
-    cast_rows.extend(swap_rows_of(ctx, agent));
-    cast_rows.sort_by_key(|&i| ctx.log.events[i].time().unwrap_or(0));
-    let rotation = actors::build_rotation(&b, start, end, skills, cols, &cast_rows);
     let swap_rows = swap_rows_of(ctx, agent);
+    // P3b:instant-cast 合成行并入。合并序 = C# InitCastEvents
+    // (SingleActor.cs:599-618):animated(时间序)→ instant(时间序)→ swap
+    // 逐条尾替换(与尾事件 <ServerDelay(10ms) 且尾为 -2 → 替换尾,等价
+    // pop+push;arc 会写同刻多行 WeaponSwap,只留最后一条)。
+    let mut cast_refs: Vec<actors::CastRef> =
+        cast_rows.iter().copied().map(actors::CastRef::Ev).collect();
+    cast_refs.extend(
+        ctx.instants
+            .lines
+            .get(&agent)
+            .into_iter()
+            .flatten()
+            .map(|l| actors::CastRef::Instant { time: l.time, skill_id: l.skill_id }),
+    );
+    for &i in &swap_rows {
+        let t = ctx.log.events[i].time().unwrap_or(0);
+        let tail_swap = matches!(cast_refs.last(), Some(actors::CastRef::Ev(j))
+            if matches!(&ctx.log.events[*j], CombatEvent::WeaponSwap(_))
+                && t - ctx.log.events[*j].time().unwrap_or(0) < 10);
+        if tail_swap {
+            cast_refs.pop();
+        }
+        cast_refs.push(actors::CastRef::Ev(i));
+    }
+    cast_refs.sort_by_key(|cr| (cr.time(ctx.log).unwrap_or(0), cr.is_swap(ctx.log)));
+    let rotation = actors::build_rotation(&b, start, end, skills, cols, &cast_refs);
     let sets = actors::estimate_weapons(log, agent, !non_squad, ctx.opts.compute_cast, &cast_rows, &swap_rows, skills);
     let weapon_sets: Vec<JsonWeaponSet> = sets
         .iter()
@@ -713,7 +736,20 @@ pub fn build_npc(
     let health_percents = b.percent_series(agent, actors::PercentKind::Health);
     let barrier_percents = b.percent_series(agent, actors::PercentKind::Barrier);
     let cast_rows = cast_rows_of(ctx, agent);
-    let rotation = actors::build_rotation(&b, start, end, skills, cols, &cast_rows);
+    // P3b:instant-cast 合成行(target 侧:敌方重定向后的 damage finder
+    // caster 落在伪 target 上 —— C# NPC actor 同走 GetIntersectingCastEvents)。
+    let mut cast_refs: Vec<actors::CastRef> =
+        cast_rows.iter().copied().map(actors::CastRef::Ev).collect();
+    cast_refs.extend(
+        ctx.instants
+            .lines
+            .get(&agent)
+            .into_iter()
+            .flatten()
+            .map(|l| actors::CastRef::Instant { time: l.time, skill_id: l.skill_id }),
+    );
+    cast_refs.sort_by_key(|cr| (cr.time(ctx.log).unwrap_or(0), cr.is_swap(ctx.log)));
+    let rotation = actors::build_rotation(&b, start, end, skills, cols, &cast_refs);
     // NPC 特有(伪 target)
     let hp_left = if true { 0.0 } else { 100.0 }; // encounter phase success
     let health_percent_burned = 100.0 - hp_left;
@@ -1235,15 +1271,25 @@ fn build_skill_desc(ctx: &Ctx, skills: &SkillTable, id: i64) -> SkillDesc {
     let mut icon = skill
         .map(|s| s.icon.clone())
         .unwrap_or_else(|| crate::content::default_skill_icon().to_string());
-    // 表外条目(合成/负 id 技能):overrides 名字/图标优先 —— 与
-    // SkillItem 构造链一致(C# SkillData.Get 对未知 id 建占位,名取自
-    // evtc/override;如 Weapon Swap=-2)。
+    // 表外条目(合成/负 id 技能):SkillItem 占位链 —— C# SkillData.Get 用
+    // DefaultName("UNKNOWN") 建占位再走 SkillItem ctor(SkillItem.cs:63-88):
+    // name = override → API 名(Unknown/全数字才替换)→ UNKNOWN;icon =
+    // override → API icon → DefaultIcon(MonsterSkill)。名以 id 数字兜底
+    // 会在全数字判定下被 buff/API 替换 —— 与 C# 一致先置 "UNKNOWN"。
     if skill.is_none() {
+        name = "UNKNOWN".to_string();
+        let api = ctx.content.skills_api.get(&id);
         if let Some(o) = ctx.content.overrides.names.get(&id) {
             name = o.clone();
+        } else if let Some(api) = api
+            && (name == "UNKNOWN" || name.chars().all(|c| c.is_ascii_digit()))
+        {
+            name = api.name.clone();
         }
         if let Some(o) = ctx.content.overrides.icons.get(&id) {
             icon = o.clone();
+        } else if let Some(api) = api {
+            icon = api.icon.clone();
         }
     }
     // Buff 覆盖(BuffsContainer.cs:151-160 OverrideFromBuff + SkillItem.cs:69
@@ -1262,17 +1308,21 @@ fn build_skill_desc(ctx: &Ctx, skills: &SkillTable, id: i64) -> SkillDesc {
     // 技能无表项时以 id 数字为名 —— 与 C# SkillData.Get 一致)。
     let auto_attack = skill.map(|s| s.api_aa).unwrap_or(false)
         || crate::skills::is_aa_override(id, ctx.meta.gw2_build);
+    // P3b 标记(JsonLogBuilder.BuildSkillDesc:23-29):
+    // IsInstantCast = CombatData.GetInstantCastData(id).Any();其余来自
+    // SkillData 的四个 HashSet(引擎按 Available finder 打标)。
+    let i = &ctx.instants;
     SkillDesc {
         name: if name.is_empty() { "UNKNOWN".to_string() } else { name },
         auto_attack,
         can_crit: crate::content::skill_can_crit(ctx.content, id, ctx.meta.gw2_build),
         icon,
         is_swap: crate::skills::is_swap(id),
-        is_instant_cast: false,
-        is_trait_proc: false,
-        is_unconditional_proc: false,
-        is_gear_proc: false,
-        is_not_accurate: false,
+        is_instant_cast: i.lines.values().any(|ls| ls.iter().any(|l| l.skill_id == id)),
+        is_trait_proc: i.trait_proc.contains(&id),
+        is_unconditional_proc: i.unconditional_proc.contains(&id),
+        is_gear_proc: i.gear_proc.contains(&id),
+        is_not_accurate: i.not_accurate.contains(&id),
         conversion_based_healing: false,
         hybrid_healing: false,
     }

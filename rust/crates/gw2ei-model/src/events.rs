@@ -393,6 +393,63 @@ pub struct JumpEventFields {
     pub on_land: bool,
 }
 
+// ===== H 组子集：Effect（StatusEvents/EffectEvents；P3b 最小面）=====
+
+/// Effect 事件的 P3b 消费最小面（EffectEventCBTS51/CBTS45 构造语义 +
+/// EffectEnd 配对）。
+///
+/// C# `EffectEvent`（EffectEvent.cs）还带 Orientation/Scale/Flags 等
+/// combat-replay 消费字段，P3b 不做；位置仅地面 effect（`IsAroundDst`
+/// false）解包（NonSplitEffectEvent.cs:9-16 的 Value/BuffDmg/Overstack
+/// 三 f32）。`end_time` = EffectEndEventCBTS51 按 TrackingID 配对（
+/// EffectEvent.SetDynamicEndTime，仅写一次）—— Sand Shade 合成与部分
+/// Effect finder checker（MineDetonation 等）消费。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EffectEventFields {
+    pub time: i64,
+    pub src: u64,
+    /// 非 0 = `IsAroundDst`（跟随该 agent；CBTS51 DstAgent != 0）。
+    pub dst: u64,
+    /// arc effect id（C# `EffectID` = SkillID 位型，与 IDToGUID 的
+    /// ContentID 同源）。
+    pub effect_id: u32,
+    /// 事件化修正后的时长：CBTS51 行值（Duration==0 时按 GUID 事件
+    /// DefaultDuration 兜底）；CBTS45 恒 0。
+    pub duration: i64,
+    /// EffectEnd 配对后的动态结束时间（`DynamicEndTime`）。
+    pub end_time: Option<i64>,
+    /// CBTS51 的 TrackingID（u32 由 IsBuffRemove/Ninety/Fifty/Moving 四字节
+    /// 拼出）；CBTS45 无 tracking（恒 0）。
+    pub tracking_id: u32,
+    /// CBTS45 世代标记（SkillID==0 的 end 行 CBTS45 直接丢弃；Sand Shade
+    /// 合成跳过 CBTS45 —— ScourgeHelper.cs:60-62）。
+    pub cbts45: bool,
+    /// 位置（DstAgent==0 时；C# `Position`）。消费端 checker 的
+    /// 位置比较用（UsingNoSecondaryEffect…OnSamePosition 等）。
+    pub position: (f32, f32, f32),
+}
+
+/// `MissileEvent`（MissileEvents/MissileEvent.cs）的 P3b 最小面：
+/// MissileCreate 行(Src、SkillID、Time)。Launch/Remove 配对与
+/// DidHit 等消费端(P3c+)需要时扩展。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissileEventFields {
+    pub time: i64,
+    /// 施放者 agent 地址。
+    pub src: u64,
+    pub skill_id: u32,
+}
+
+/// IDToGUID Effect 行解析出的 effect 元数据（C# `EffectGUIDEvent`；
+/// EffectGUIDEvent.cs:12-23）。GUID hex 32 大写字符（GuidEventFields::guid_hex
+/// 同一编码）；`default_duration` 在 arc build ≥ ExtraDataInGUIDEvents
+/// (20241030) 时由 BuffDmg f32 位型给出（毫秒值以 float 承载），否则 -1。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectGuidInfo {
+    pub guid_hex: String,
+    pub default_duration: i64,
+}
+
 // ===== G 组：metadata 事件（MetaDataEvents/）=====
 
 /// `InstanceStartEvent`：TimeOffsetFromInstanceCreation=logStart-SrcAgent、
@@ -727,6 +784,10 @@ pub enum CombatEvent {
     Velocity(MovementEventFields),
     Teleport(MovementEventFields),
     Jump(JumpEventFields),
+    // H 组子集：Effect（P3b；EffectEnd 行不产生事件只配对）
+    Effect(EffectEventFields),
+    // H 组子集：Missile（P3b 仅 MissileCreate 行）
+    Missile(MissileEventFields),
     // G metadata —— 单例
     InstanceStart(InstanceStartEventFields),
     Language(LanguageEventFields),
@@ -864,6 +925,8 @@ impl CombatEvent {
             Velocity(e) => e.event_time(),
             Teleport(e) => e.event_time(),
             Jump(e) => e.event_time(),
+            Effect(e) => e.time,
+            Missile(e) => e.time,
             InstanceStart(e) => e.event_time(),
             MapId(e) => e.event_time(),
             MapChange(e) => e.event_time(),
@@ -977,6 +1040,8 @@ impl CombatEvent {
             Rotation(e) => (e.base.src, 0),
             Velocity(e) => (e.base.src, 0),
             Teleport(e) => (e.base.src, 0),
+            Effect(e) => (e.src, e.dst),
+            Missile(e) => (e.src, 0),
             InstanceStart(_) => (0, 0),
             Language(_) => (0, 0),
             Gw2Build(_) => (0, 0),

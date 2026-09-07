@@ -90,6 +90,16 @@ pub(crate) struct Collector<'a> {
     /// Targetable/Visibility 的连续同值去重状态（per src 尾事件）。
     pub(crate) last_targetable_by_src: BTreeMap<u64, bool>,
     pub(crate) last_visibility_by_src: BTreeMap<u64, bool>,
+    /// Effect CBTS51 start 事件按 TrackingID 的配对表（事件化第二遍按
+    /// 时间序访问，桶内尾部即最近的 start —— C#
+    /// `EffectEventsByTrackingID` 的 LastOrDefault(x => x.Time <= Time)）。
+    pub(crate) effect_starts_by_tracking: BTreeMap<u32, Vec<usize>>,
+    /// Split 世代(C# EffectEventsByTrackingID 按世代分桶 ——
+    /// `GroundEffectEventsByTrackingID`/`AgentEffectEventsByTrackingID`):
+    /// EffectGroundCreate start 的 tracking(行 Pad)。
+    pub(crate) split_ground_by_tracking: BTreeMap<u32, Vec<usize>>,
+    /// EffectAgentCreate start 的 tracking(行 Pad)。
+    pub(crate) split_agent_by_tracking: BTreeMap<u32, Vec<usize>>,
 }
 
 impl<'a> Collector<'a> {
@@ -130,6 +140,9 @@ pub fn build_combat_data(log: EvtcRawLog) -> Result<CombatData, ModelError> {
         id_counts: BTreeMap::new(),
         last_targetable_by_src: BTreeMap::new(),
         last_visibility_by_src: BTreeMap::new(),
+        effect_starts_by_tracking: BTreeMap::new(),
+        split_ground_by_tracking: BTreeMap::new(),
+        split_agent_by_tracking: BTreeMap::new(),
     };
 
     // 第一遍：essential metadata 先行（CombatData.cs:556-564）。

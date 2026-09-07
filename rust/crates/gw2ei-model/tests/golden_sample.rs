@@ -138,3 +138,28 @@ fn dump_counts(c: &CategoryCounts) {
         eprintln!("{name:<24} {n}");
     }
 }
+
+/// P3b 事件面锚点:effect/missile 事件化的保留计数(与 instant 引擎
+/// 消费同源;Split 世代 60-63)。数值来自 20260530-205048.zevtc 实测
+/// (2026-09-07 P3b 对拍锁定)。
+#[test]
+fn golden_sample_effect_missile_event_counts() {
+    let Some(log) = load_sample() else { return };
+    let data = build_combat_data(log).expect("eventize");
+    let mut effect = 0usize;
+    let mut missile = 0usize;
+    let mut guid_effect = 0usize;
+    for e in &data.events {
+        match e {
+            CombatEvent::Effect(_) => effect += 1,
+            CombatEvent::Missile(_) => missile += 1,
+            CombatEvent::GuidEffect(_) => guid_effect += 1,
+            _ => {}
+        }
+    }
+    eprintln!("effect={effect} missile={missile} guid_effect={guid_effect}");
+    // 保留数锁定(Split 世代;OnNonStaticPlatform 释放行已滤)
+    assert_eq!(effect, 30_477);
+    assert_eq!(missile, 2314);
+    assert_eq!(guid_effect, 0);
+}
