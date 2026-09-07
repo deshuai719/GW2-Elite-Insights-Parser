@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gw2ei-parse", "crates/gw2ei-model"]
+members = ["crates/gw2ei-parse", "crates/gw2ei-model", "crates/gw2ei-json", "crates/gw2ei-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,3 +12,8 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"

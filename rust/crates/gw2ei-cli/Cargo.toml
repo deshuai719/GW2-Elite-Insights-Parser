@@ -1,0 +1,14 @@
+[package]
+name = "gw2ei-cli"
+description = "EI-equivalent CLI: parse a log and emit the aligned JSON report"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gw2ei-model = { path = "../gw2ei-model" }
+gw2ei-json = { path = "../gw2ei-json" }
+serde_json = { workspace = true }

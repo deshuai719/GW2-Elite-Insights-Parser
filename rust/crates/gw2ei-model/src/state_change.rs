@@ -266,7 +266,10 @@ pub(crate) fn dispatch_state_change(c: &mut Collector<'_>, item: &EvtcCombatItem
             c.counts.metadata_singletons += 1;
             c.metadata.instance_start = Some(InstanceStartEventFields {
                 time: item.time,
-                time_offset_from_instance_creation: 0_i64.wrapping_sub(item.src_agent as i64),
+                // C# `logStart - (long)SrcAgent`(InstanceStartEvent.cs:13):
+                // logStart 为归零前起点,不是 0 —— P1 以 wrapping 减法近似
+                // 仅在日志起点为 0 时成立,此处改为显式原始起点。
+                time_offset_from_instance_creation: c.log_start.wrapping_sub(item.src_agent as i64),
                 instance_ip: ip,
             });
         }

@@ -133,7 +133,10 @@ pub fn build_event_index(log: &ParsedLog) -> EventIndex {
                 push(&mut idx.cc_to, rb, i);
             }
             CombatEvent::StunBreak(_) => {
-                push(&mut idx.stun_break_to, ra, i);
+                // StunBreak 方向修正后 To=被打断者(from 恒 unknown);
+                // 桶按 to 侧(rb)。stats.rs json 层的 support/defense
+                // 查询 stun_break_to(root)。
+                push(&mut idx.stun_break_to, rb, i);
             }
             CombatEvent::AnimatedCast(_)
             | CombatEvent::Emote(_)

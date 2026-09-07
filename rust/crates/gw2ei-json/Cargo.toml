@@ -1,0 +1,16 @@
+[package]
+name = "gw2ei-json"
+description = "EI JSON output contract (serde DTOs + builder) aligned with GW2EIJSON/JsonLogBuilder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gw2ei-parse = { path = "../gw2ei-parse" }
+gw2ei-model = { path = "../gw2ei-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = "0.4"

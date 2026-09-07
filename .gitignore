@@ -280,3 +280,4 @@ __pycache__/
 rust/target/
 rust/golden/
 rust/testdata/*.zevtc
+rust/content/

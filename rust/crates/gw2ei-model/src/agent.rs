@@ -485,8 +485,18 @@ pub fn agent_from_raw_with(
         condition: raw.condition,
         concentration: raw.concentration,
         // C# 读取时即 ×2（EvtcParser.cs:560/564）
-        hitbox_width: u32::from(raw.hitbox_width_raw) * 2,
-        hitbox_height: u32::from(raw.hitbox_height_raw) * 2,
+        // 玩家恒 48×240（AgentItem.cs:100-101,IsPlayer 分支强设;NonSquad
+        // 玩家同属 Player 判定）。NPC/Gadget 保持 raw×2。
+        hitbox_width: if matches!(agent_type, AgentType::Player | AgentType::NonSquadPlayer) {
+            48
+        } else {
+            u32::from(raw.hitbox_width_raw) * 2
+        },
+        hitbox_height: if matches!(agent_type, AgentType::Player | AgentType::NonSquadPlayer) {
+            240
+        } else {
+            u32::from(raw.hitbox_height_raw) * 2
+        },
         first_aware: i64::MAX,
         last_aware: i64::MAX,
         master: NO_AGENT,

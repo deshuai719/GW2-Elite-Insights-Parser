@@ -72,6 +72,8 @@ impl AgentLookup {
 /// `Eventize` 的中间收集状态（分桶对应 C# 构造器的局部桶）。
 pub(crate) struct Collector<'a> {
     pub(crate) build: i32,
+    /// 原始(归零前)日志起点(InstanceStart 的 offset 计算)。
+    pub(crate) log_start: i64,
     pub(crate) agents: &'a AgentLookup,
     /// Generic breakbar id（skillData.GenericBreakbarID，用于 recovery 分流）。
     pub(crate) generic_breakbar_id: u32,
@@ -107,6 +109,8 @@ pub fn build_combat_data(log: EvtcRawLog) -> Result<CombatData, ModelError> {
 
     let agents = AgentLookup::new(&log);
     let (dodge_id, generic_breakbar_id) = skill_ids::dodge_and_breakbar_for_build(build);
+    // 归零前的原始日志起点(C# EvtcLogOffset;InstanceStart 的 offset 计算用)。
+    let log_start_offset = log.log_start_offset;
 
     let mut items = log.combat_events;
     // C# `combatEvents.SortByTime()`（稳定排序；CombatData.cs:544）。
@@ -114,6 +118,7 @@ pub fn build_combat_data(log: EvtcRawLog) -> Result<CombatData, ModelError> {
 
     let mut collector = Collector {
         build,
+        log_start: log_start_offset,
         agents: &agents,
         generic_breakbar_id,
         events: Vec::with_capacity(items.len()),
