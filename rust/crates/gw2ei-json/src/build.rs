@@ -18,21 +18,26 @@ pub fn build_json(ctx: &Ctx) -> Result<JsonLog, crate::BuildError> {
     let mut cols = Collectors::default();
     let skills = SkillTable::from_names(&log.skills, ctx.content);
 
+    // ---- buff 仿真（P3a；friend roots 全量一次）----
+    let buff_sims = crate::buffsim::build_buff_sims(ctx);
+
     // ---- targets(NPC;WvW 伪 target)----
     let targets: Vec<JsonNpc> = log
         .targets
         .iter()
-        .map(|t| build_npc(ctx, &skills, &mut cols, t.agent))
+        .map(|t| build_npc(ctx, &skills, &mut cols, t.agent, &buff_sims))
         .collect();
     // ---- players(玩家 + 友方非小队)----
     let players: Vec<JsonPlayer> = log
         .friendlies
         .iter()
         .map(|f| match f {
-            Friend::Player(i) => build_player(ctx, &skills, &mut cols, log.players[*i].agent, false),
+            Friend::Player(i) => {
+                build_player(ctx, &skills, &mut cols, log.players[*i].agent, false, &buff_sims)
+            }
             Friend::NonSquad(i) => {
                 let ns = &log.friendly_non_squad[*i];
-                build_player(ctx, &skills, &mut cols, ns.agent, true)
+                build_player(ctx, &skills, &mut cols, ns.agent, true, &buff_sims)
             }
         })
         .collect();
@@ -279,7 +284,15 @@ fn team_guid(ctx: &Ctx, team_id: i64) -> Option<String> {
 // ===== 玩家构建 =====
 
 #[allow(clippy::too_many_lines)]
-pub fn build_player(ctx: &Ctx, skills: &SkillTable, cols: &mut Collectors, agent: gw2ei_model::AgentId, non_squad: bool) -> JsonPlayer {
+#[allow(clippy::too_many_arguments)]
+pub fn build_player(
+    ctx: &Ctx,
+    skills: &SkillTable,
+    cols: &mut Collectors,
+    agent: gw2ei_model::AgentId,
+    non_squad: bool,
+    buff_sims: &crate::buffsim::BuffSims,
+) -> JsonPlayer {
     let log = ctx.log;
     let a = log.agents.slot(agent).expect("player agent");
     let actor = ActorRows::new(log, &ctx.rows, agent);
@@ -289,6 +302,22 @@ pub fn build_player(ctx: &Ctx, skills: &SkillTable, cols: &mut Collectors, agent
     let end = phase.end;
     let target_id = log.log_data.dummy_target_agent;
     let dur = (end - start) as f64 / 1000.0;
+
+    // ---- buff 族块（P3a；单 phase = whole log）----
+    let group = if non_squad {
+        log.friendly_non_squad
+            .iter()
+            .find(|n| n.agent == agent)
+            .map(|n| i64::from(n.group))
+            .unwrap_or(51)
+    } else {
+        log.players
+            .iter()
+            .find(|p| p.agent == agent)
+            .map(|p| i64::from(p.group))
+            .unwrap_or(1)
+    };
+    let buff_blocks = crate::json_buffs::build_player_blocks(ctx, buff_sims, agent, group, !non_squad);
 
     // ---- dpsAll/dpsTargets ----
     let all_rows: Vec<gw2ei_model::DmgRow> = b
@@ -334,10 +363,10 @@ pub fn build_player(ctx: &Ctx, skills: &SkillTable, cols: &mut Collectors, agent
         time_saved: gp.after_cast_interrupted_duration,
         stack_dist: 0.0,
         dist_to_com: 0.0,
-        avg_boons: 0.0,
-        avg_active_boons: 0.0,
-        avg_conditions: 0.0,
-        avg_active_conditions: 0.0,
+        avg_boons: buff_blocks.avg_boons,
+        avg_active_boons: buff_blocks.avg_active_boons,
+        avg_conditions: buff_blocks.avg_conditions,
+        avg_active_conditions: buff_blocks.avg_active_conditions,
         swap_count: gp.swap_count,
         skill_cast_uptime: gp.cast_uptime,
         skill_cast_uptime_no_aa: gp.cast_uptime_no_aa,
@@ -455,6 +484,10 @@ pub fn build_player(ctx: &Ctx, skills: &SkillTable, cols: &mut Collectors, agent
             cols.buff_map.insert(l.buff_id, ());
         }
     }
+    // P3a：16 个 buff 族块的引用 id（C# JsonBuffsUptimeBuilder/… 副作用）
+    for id in &buff_blocks.map_ids {
+        cols.buff_map.insert(*id, ());
+    }
     let mut last_death = 0i64;
     let dead_rows = ctx.aux.dead_rows.get(&agent).cloned().unwrap_or_default();
     let down_rows = ctx.aux.down_rows.get(&agent).cloned().unwrap_or_default();
@@ -567,10 +600,29 @@ pub fn build_player(ctx: &Ctx, skills: &SkillTable, cols: &mut Collectors, agent
         barrier_percents,
         consumables,
         death_recap: if death_recap.is_empty() { None } else { Some(death_recap) },
+        buff_uptimes: buff_blocks.buff_uptimes,
+        buff_uptimes_active: buff_blocks.buff_uptimes_active,
+        self_buffs: buff_blocks.self_buffs,
+        self_buffs_active: buff_blocks.self_buffs_active,
+        group_buffs: buff_blocks.group_buffs,
+        group_buffs_active: buff_blocks.group_buffs_active,
+        off_group_buffs: buff_blocks.off_group_buffs,
+        off_group_buffs_active: buff_blocks.off_group_buffs_active,
+        squad_buffs: buff_blocks.squad_buffs,
+        squad_buffs_active: buff_blocks.squad_buffs_active,
+        conditions_states: buff_blocks.conditions_states,
+        boons_states: buff_blocks.boons_states,
     }
 }
 
-pub fn build_npc(ctx: &Ctx, skills: &SkillTable, cols: &mut Collectors, agent: gw2ei_model::AgentId) -> JsonNpc {
+#[allow(clippy::too_many_arguments)]
+pub fn build_npc(
+    ctx: &Ctx,
+    skills: &SkillTable,
+    cols: &mut Collectors,
+    agent: gw2ei_model::AgentId,
+    _buff_sims: &crate::buffsim::BuffSims,
+) -> JsonNpc {
     let log = ctx.log;
     let a = log.agents.slot(agent).expect("npc agent");
     let actor = ActorRows::new(log, &ctx.rows, agent);
@@ -699,6 +751,8 @@ pub fn build_npc(ctx: &Ctx, skills: &SkillTable, cols: &mut Collectors, agent: g
         condition_damage_1s,
         health_percents,
         barrier_percents,
+        conditions_states: Vec::new(),
+        boons_states: Vec::new(),
     }
 }
 

@@ -462,6 +462,7 @@ fn add_buff_apply(c: &mut Collector<'_>, item: &EvtcCombatItem) {
             initial,
             applied_duration,
             original_applied_duration,
+            added_active: item.is_shields > 0,
         }));
         c.counts.buff_apply += 1;
     }

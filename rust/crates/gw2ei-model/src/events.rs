@@ -155,13 +155,16 @@ pub struct BuffApplyBaseFields {
 
 /// `BuffApplyEvent`：Initial=state==BuffInitial、AppliedDuration=Value；
 /// Initial 且 build ≥ 20231107 时 OriginalAppliedDuration=BuffDmg 否则同
-/// AppliedDuration（BuffApplyEvent.cs:25-34）。
+/// AppliedDuration（BuffApplyEvent.cs:25-34）。`added_active` =
+/// `IsShields > 0`（BuffApplyEvent.cs:29 —— P3 buff 仿真入参，P1 未存）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuffApplyEventFields {
     pub apply: BuffApplyBaseFields,
     pub initial: bool,
     pub applied_duration: i32,
     pub original_applied_duration: i32,
+    /// C# `_addedActive`（IsShields>0）。
+    pub added_active: bool,
 }
 
 /// `BuffExtensionEvent`：NewDuration=OverstackValue、ExtendedDuration=max(Value,0)

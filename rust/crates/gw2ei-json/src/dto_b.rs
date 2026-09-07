@@ -114,6 +114,31 @@ pub struct JsonPlayer {
     pub consumables: Option<Vec<JsonConsumable>>,
     #[serde(rename = "deathRecap", skip_serializing_if = "Option::is_none")]
     pub death_recap: Option<Vec<JsonDeathRecap>>,
+    // ---- P3a buff 族块 ----
+    #[serde(rename = "buffUptimes")]
+    pub buff_uptimes: Vec<JsonBuffsUptime>,
+    #[serde(rename = "buffUptimesActive")]
+    pub buff_uptimes_active: Vec<JsonBuffsUptime>,
+    #[serde(rename = "selfBuffs", skip_serializing_if = "Option::is_none")]
+    pub self_buffs: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "selfBuffsActive", skip_serializing_if = "Option::is_none")]
+    pub self_buffs_active: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "groupBuffs", skip_serializing_if = "Option::is_none")]
+    pub group_buffs: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "groupBuffsActive", skip_serializing_if = "Option::is_none")]
+    pub group_buffs_active: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "offGroupBuffs", skip_serializing_if = "Option::is_none")]
+    pub off_group_buffs: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "offGroupBuffsActive", skip_serializing_if = "Option::is_none")]
+    pub off_group_buffs_active: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "squadBuffs", skip_serializing_if = "Option::is_none")]
+    pub squad_buffs: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "squadBuffsActive", skip_serializing_if = "Option::is_none")]
+    pub squad_buffs_active: Option<Vec<JsonPlayerBuffsGeneration>>,
+    #[serde(rename = "conditionsStates")]
+    pub conditions_states: Vec<Vec<i64>>,
+    #[serde(rename = "boonsStates")]
+    pub boons_states: Vec<Vec<i64>>,
 }
 
 // ===== JsonNPC（JsonNPC.cs）=====
@@ -182,6 +207,10 @@ pub struct JsonNpc {
     pub health_percents: Vec<Vec<f64>>,
     #[serde(rename = "barrierPercents")]
     pub barrier_percents: Vec<Vec<f64>>,
+    #[serde(rename = "conditionsStates")]
+    pub conditions_states: Vec<Vec<i64>>,
+    #[serde(rename = "boonsStates")]
+    pub boons_states: Vec<Vec<i64>>,
 }
 
 // ===== JsonActorUtilities =====
@@ -553,4 +582,72 @@ pub struct JsonDeathRecapItem {
     pub damage: i64,
     #[serde(rename = "time")]
     pub time: i64,
+}
+
+// ===== Buff 族块（JsonBuffsUptime / JsonPlayerBuffsGeneration；P3a）=====
+
+/// JsonBuffsUptime（buffUptimes/buffUptimesActive 元素）。
+#[derive(Serialize)]
+pub struct JsonBuffsUptime {
+    #[serde(rename = "id")]
+    pub id: i64,
+    /// 每 phase 一项。
+    #[serde(rename = "buffData")]
+    pub buff_data: Vec<JsonBuffsUptimeData>,
+    #[serde(rename = "states", skip_serializing_if = "Option::is_none")]
+    pub states: Option<Vec<Vec<i64>>>,
+    #[serde(rename = "statesPerSource", skip_serializing_if = "Option::is_none")]
+    pub states_per_source: Option<std::collections::BTreeMap<String, Vec<Vec<i64>>>>,
+}
+
+/// JsonBuffsUptimeData（每 phase：标量 + 每源字典；空源 → 空 dict 照常输出）。
+#[derive(Serialize)]
+pub struct JsonBuffsUptimeData {
+    #[serde(rename = "uptime", serialize_with = "ser_f64")]
+    pub uptime: f64,
+    #[serde(rename = "presence", serialize_with = "ser_f64")]
+    pub presence: f64,
+    #[serde(rename = "generated")]
+    pub generated: std::collections::BTreeMap<String, f64>,
+    #[serde(rename = "generatedPresence")]
+    pub generated_presence: std::collections::BTreeMap<String, f64>,
+    #[serde(rename = "overstacked")]
+    pub overstacked: std::collections::BTreeMap<String, f64>,
+    #[serde(rename = "wasted")]
+    pub wasted: std::collections::BTreeMap<String, f64>,
+    #[serde(rename = "unknownExtended")]
+    pub unknown_extended: std::collections::BTreeMap<String, f64>,
+    #[serde(rename = "byExtension")]
+    pub by_extension: std::collections::BTreeMap<String, f64>,
+    #[serde(rename = "extended")]
+    pub extended: std::collections::BTreeMap<String, f64>,
+}
+
+/// JsonPlayerBuffsGeneration（self/group/offGroup/squad Buffs 元素）。
+#[derive(Serialize)]
+pub struct JsonPlayerBuffsGeneration {
+    #[serde(rename = "id")]
+    pub id: i64,
+    /// 每 phase 一项（缺 phase → 全 0 项照常输出）。
+    #[serde(rename = "buffData")]
+    pub buff_data: Vec<JsonBuffsGenerationData>,
+}
+
+/// JsonBuffsGenerationData（7 标量）。
+#[derive(Serialize)]
+pub struct JsonBuffsGenerationData {
+    #[serde(rename = "generation", serialize_with = "ser_f64")]
+    pub generation: f64,
+    #[serde(rename = "generationPresence", serialize_with = "ser_f64")]
+    pub generation_presence: f64,
+    #[serde(rename = "overstack", serialize_with = "ser_f64")]
+    pub overstack: f64,
+    #[serde(rename = "wasted", serialize_with = "ser_f64")]
+    pub wasted: f64,
+    #[serde(rename = "unknownExtended", serialize_with = "ser_f64")]
+    pub unknown_extended: f64,
+    #[serde(rename = "extended", serialize_with = "ser_f64")]
+    pub extended: f64,
+    #[serde(rename = "byExtension", serialize_with = "ser_f64")]
+    pub by_extension: f64,
 }

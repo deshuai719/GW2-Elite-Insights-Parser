@@ -1,0 +1,12 @@
+[package]
+name = "gw2ei-semantics"
+description = "Buff stacking simulation & buff statistics (port of EI EIData/Buffs/BuffSimulators NoID family + BuffStatistics)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gw2ei-parse = { path = "../gw2ei-parse" }

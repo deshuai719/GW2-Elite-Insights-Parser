@@ -128,6 +128,7 @@ dependencies = [
  "chrono",
  "gw2ei-model",
  "gw2ei-parse",
+ "gw2ei-semantics",
  "serde",
  "serde_json",
 ]
@@ -145,6 +146,13 @@ version = "0.1.0"
 dependencies = [
  "thiserror",
  "zip",
+]
+
+[[package]]
+name = "gw2ei-semantics"
+version = "0.1.0"
+dependencies = [
+ "gw2ei-parse",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 gw2ei-parse = { path = "../gw2ei-parse" }
 gw2ei-model = { path = "../gw2ei-model" }
+gw2ei-semantics = { path = "../gw2ei-semantics" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = "0.4"

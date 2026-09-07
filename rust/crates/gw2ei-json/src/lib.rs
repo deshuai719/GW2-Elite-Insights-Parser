@@ -7,9 +7,11 @@
 //! `tests/golden_compare.rs` 的块清单。
 
 pub mod actors;
+pub mod buffsim;
 pub mod build;
 pub mod content;
 pub mod ctx;
+pub mod json_buffs;
 pub mod dto_a;
 pub mod dto_b;
 pub mod rows;

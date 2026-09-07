@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gw2ei-parse", "crates/gw2ei-model", "crates/gw2ei-json", "crates/gw2ei-cli"]
+members = ["crates/gw2ei-parse", "crates/gw2ei-model", "crates/gw2ei-json", "crates/gw2ei-semantics", "crates/gw2ei-cli"]
 
 [workspace.package]
 version = "0.1.0"

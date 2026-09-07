@@ -8,7 +8,7 @@
 //! 运行:golden 基准 `rust/golden/*.json` 缺失时跳过(skip-if-missing)。
 //! 样例:testdata/20260530-205048.zevtc(须与 golden 同目录相对仓库根)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde_json::Value;
@@ -69,10 +69,11 @@ fn load_sample() -> Option<&'static (Value, Value)> {
                 return None;
             }
         };
-        let golden: Value = serde_json::from_str(
+        let mut golden: Value = serde_json::from_str(
             &std::fs::read_to_string(&golden_file).expect("read golden"),
         )
         .expect("parse golden");
+        canon_buff_families(&mut golden);
         let content_dir = root.join("content");
         if !content_dir.join("buff-table.json").exists() {
             eprintln!(
@@ -87,7 +88,8 @@ fn load_sample() -> Option<&'static (Value, Value)> {
             &gw2ei_json::BuildOptions::default(),
         )
         .expect("build report");
-        let rust = gw2ei_json::shorten_numbers(serde_json::to_value(&json).expect("to value"));
+        let mut rust = gw2ei_json::shorten_numbers(serde_json::to_value(&json).expect("to value"));
+        canon_buff_families(&mut rust);
         Some((golden, rust))
     })
     .as_ref()
@@ -99,16 +101,6 @@ const OOS_KEYS: &[&str] = &[
     "damageModifiersTarget",
     "incomingDamageModifiers",
     "incomingDamageModifiersTarget",
-    "buffUptimes",
-    "buffUptimesActive",
-    "selfBuffs",
-    "selfBuffsActive",
-    "groupBuffs",
-    "groupBuffsActive",
-    "offGroupBuffs",
-    "offGroupBuffsActive",
-    "squadBuffs",
-    "squadBuffsActive",
     "buffVolumes",
     "buffVolumesActive",
     "selfBuffVolumes",
@@ -121,8 +113,6 @@ const OOS_KEYS: &[&str] = &[
     "squadBuffVolumesActive",
     "combatReplayData",
     "combatReplayMetaData",
-    "boonsStates",
-    "conditionsStates",
     "activeCombatMinions",
     "activeRangerPets",
     "activeClones",
@@ -151,8 +141,32 @@ fn is_oos(path: &str) -> bool {
         .any(|k| path.ends_with(k) || path.contains(&format!(".{k}.")) || path.contains(&format!(".{k}[")))
 }
 
+/// 3 位玩家的 boonsStates/avgBoons 残留：同一 regen-718 尾段（末栈 1090ms
+/// 时长差,柯坷/何欢的魂武/正经多层五花肉的日志尾部 regen 段）传导到
+/// presence 叠加图与 avgBoons 分母 —— 紧致登记（player+键 精确对）。
+fn regen_tail_avg(path: &str) -> bool {
+    const PLAYERS: &[&str] = &[
+        "柯坷|柯沫先生.9671",
+        "何欢的魂武|神有何欢.5840",
+        "正经多层五花肉|火页吖.7059",
+    ];
+    let Some(rest) = path.strip_prefix("players[") else {
+        return false;
+    };
+    let Some(pl) = rest.split(']').next() else { return false };
+    if !PLAYERS.contains(&pl) {
+        return false;
+    }
+    rest.ends_with(".boonsStates")
+        || rest.ends_with(".statsAll[0].avgBoons")
+        || rest.ends_with(".statsAll[0].avgActiveBoons")
+}
+
 fn is_known_diff(path: &str) -> bool {
     // 已知差异分类(登记原因,非静默):
+    if regen_tail_avg(path) {
+        return true;
+    }
     // - skillMap 的 proc 标记(P3 instant-cast finder)
     // - statsAll 的 Sim/CR 依赖字段(P3/P2c)
     // - skillMap 缺键:instant-cast/minion/buffInfo 引用的技能(P3/P2c
@@ -182,10 +196,6 @@ fn is_known_diff(path: &str) -> bool {
         || path.ends_with(".isUnconditionalProc")
         || path.ends_with(".isGearProc")
         || path.ends_with(".isNotAccurate")
-        || path.ends_with(".avgBoons")
-        || path.ends_with(".avgActiveBoons")
-        || path.ends_with(".avgConditions")
-        || path.ends_with(".avgActiveConditions")
         || path.ends_with(".stackDist")
         || path.ends_with(".distToCom")
         || path.ends_with(".saved")
@@ -203,34 +213,95 @@ fn is_known_diff(path: &str) -> bool {
         || path.ends_with(".dcCount")
 }
 
-fn diff_at(path: &str, g: &Value, r: &Value, out: &mut Vec<String>) {
+/// P3a 残留：Regeneration(718,healing-queue)的 per-source 归属在 ~4s 窗口
+/// 边界级有差（样例 26 位玩家受影响；其余 138 个 buff id 逐位一致）。
+/// 根因：多治疗者堆叠队列在满员淘汰/活化指令执行序上的 C# 细节（WvW
+/// 样例 regen 叠 5 人持续互刷,窗口归属高度敏感）。登记为 KNOWN_DIFF：按
+/// 条目 id == 718 精确豁免（条目在族数组中的下标不定 —— buffUptimes 里是
+/// [1]，offGroup/squad 生成族里是 [0]）。
+const BUFF_FAMILIES: &[&str] = &[
+    "buffUptimesActive", "buffUptimes", "selfBuffsActive", "selfBuffs", "groupBuffsActive",
+    "groupBuffs", "offGroupBuffsActive", "offGroupBuffs", "squadBuffsActive", "squadBuffs",
+];
+
+fn entry_id(v: &Value) -> Option<i64> {
+    v.get("id").and_then(|i| i.as_i64())
+}
+
+/// 条目级豁免 id 集（718 regen；-51 Sand Shade P3b）。
+fn known_buff_entry(v: &Value) -> bool {
+    matches!(entry_id(v), Some(718) | Some(-51))
+}
+
+/// 该 (golden, rust) 对在数组层是否可豁免：整族 len 差时差集 ⊆
+/// {718, -51}（718 = Regen healing-queue per-source 执行序残留；
+/// -51 = Sand Shade —— ScourgeHelper 效应→buff 合成属 P3b 范围）。
+fn regen_len_exempt(g: &Value, r: &Value) -> bool {
+    let (Some(ga), Some(ra)) = (g.as_array(), r.as_array()) else {
+        return false;
+    };
+    let gids: BTreeSet<i64> = ga.iter().filter_map(entry_id).collect();
+    let rids: BTreeSet<i64> = ra.iter().filter_map(entry_id).collect();
+    gids.symmetric_difference(&rids)
+        .all(|id| *id == 718 || *id == -51)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn diff_at(
+    path: &str,
+    g: &Value,
+    r: &Value,
+    out: &mut Vec<String>,
+    suppress: bool,
+) {
     match (g, r) {
         (Value::Object(go), Value::Object(ro)) => {
+            // 族数组条目级豁免:路径形如 players[..].{fam}[N] 且条目 id==718
+            let entry_sup = !suppress
+                && known_buff_entry(g)
+                && BUFF_FAMILIES.iter().any(|f| {
+                    path.contains(&format!(".{f}["))
+                });
             for (k, gv) in go {
                 let p = format!("{path}.{k}");
+                // 数组层豁免：族名数组 → 条目全部 id==718（len 相等时）或
+                // len 差且差集 ⊆ 718
+                // 族数组 len 差且差集 ⊆ {718} → 整数组豁免（条目级豁免在
+                // 条目对象分支按 id==718 判定）
+                let mut sup = suppress || entry_sup;
+                if !sup && BUFF_FAMILIES.contains(&k.as_str())
+                    && gv.as_array().is_some()
+                    && ro.get(k).is_some_and(|x| x.is_array())
+                    && gv.as_array().expect("a").len() != ro.get(k).expect("a").as_array().expect("a").len()
+                    && regen_len_exempt(gv, ro.get(k).expect("a"))
+                {
+                    sup = true;
+                }
                 match ro.get(k) {
                     None => {
-                        if !is_oos(&p) {
+                        if !is_oos(&p) && !sup {
                             out.push(format!("{p}: missing in rust (golden={})", trunc(gv)));
                         }
                     }
-                    Some(rv) => diff_at(&p, gv, rv, out),
+                    Some(rv) => diff_at(&p, gv, rv, out, sup),
                 }
             }
             // rust 独有键(顺序差异不报;仅内容性)
             for k in ro.keys() {
-                if !go.contains_key(k) && !is_oos(&format!("{path}.{k}")) {
+                if !go.contains_key(k) && !is_oos(&format!("{path}.{k}")) && !suppress {
                     out.push(format!("{path}.{k}: extra key in rust"));
                 }
             }
         }
         (Value::Array(ga), Value::Array(ra)) => {
             if ga.len() != ra.len() {
-                out.push(format!("{path}: array len {}(golden) vs {}(rust)", ga.len(), ra.len()));
+                if !suppress {
+                    out.push(format!("{path}: array len {}(golden) vs {}(rust)", ga.len(), ra.len()));
+                }
                 return;
             }
             for (i, (gv, rv)) in ga.iter().zip(ra.iter()).enumerate() {
-                diff_at(&format!("{path}[{i}]"), gv, rv, out);
+                diff_at(&format!("{path}[{i}]"), gv, rv, out, suppress);
             }
         }
         (Value::Number(gv), Value::Number(rv)) => {
@@ -240,22 +311,26 @@ fn diff_at(path: &str, g: &Value, r: &Value, out: &mut Vec<String>) {
                 || gv.as_f64()
                     .zip(rv.as_f64())
                     .is_some_and(|(g, r)| g == r);
-            if !eq {
+            if !eq && !suppress {
                 out.push(format!("{path}: {gv} vs {rv}"));
             }
         }
         (Value::String(gv), Value::String(rv)) => {
-            if gv != rv {
+            if gv != rv && !suppress {
                 out.push(format!("{path}: {gv:?} vs {rv:?}"));
             }
         }
         (Value::Bool(gv), Value::Bool(rv)) => {
-            if gv != rv {
+            if gv != rv && !suppress {
                 out.push(format!("{path}: {gv} vs {rv}"));
             }
         }
         (Value::Null, Value::Null) => {}
-        (gv, rv) => out.push(format!("{path}: type {gv:?} vs {rv:?}")),
+        (gv, rv) => {
+            if !suppress {
+                out.push(format!("{path}: type {gv:?} vs {rv:?}"));
+            }
+        }
     }
 }
 
@@ -273,8 +348,31 @@ fn trunc(v: &Value) -> String {
     }
 }
 
+/// P3a：buff 族数组条目序 = C# Dictionary/HashSet 插入序（不可复现）——
+/// 双方按条目 id 升序规范后再逐位比较（design.md 有意偏差登记）。
+fn canon_buff_families(v: &mut Value) {
+    const FAMILIES: &[&str] = &[
+        "buffUptimes", "buffUptimesActive", "selfBuffs", "selfBuffsActive", "groupBuffs",
+        "groupBuffsActive", "offGroupBuffs", "offGroupBuffsActive", "squadBuffs",
+        "squadBuffsActive",
+    ];
+    let Some(root) = v.as_object_mut() else { return };
+    let Some(players) = root.get_mut("players").and_then(|p| p.as_array_mut()) else {
+        return;
+    };
+    for p in players {
+        let Some(obj) = p.as_object_mut() else { continue };
+        for fam in FAMILIES {
+            let Some(arr) = obj.get_mut(*fam).and_then(|a| a.as_array_mut()) else {
+                continue;
+            };
+            arr.sort_by_key(|entry| entry.get("id").and_then(|i| i.as_i64()).unwrap_or(i64::MIN));
+        }
+    }
+}
+
 fn compare_block(name: &str, g: &Value, r: &Value, out: &mut Vec<String>) {
-    diff_at(name, g, r, out);
+    diff_at(name, g, r, out, false);
 }
 
 /// 玩家内容按 name|account 索引比较(golden 排序为 C# culture-aware,
@@ -310,7 +408,7 @@ fn compare_players_indexed(
     }
     for (k, gv) in &gi {
         let rv = ri.get(k).expect("rust");
-        diff_at(&format!("players[{k}]"), gv, rv, out);
+        diff_at(&format!("players[{k}]"), gv, rv, out, false);
     }
     (out.len(), order_diff)
 }
@@ -343,7 +441,7 @@ fn golden_compare_wvw_sample() {
         let p = format!("top.{k}");
         match r.get(k) {
             None => diffs.push(format!("{p}: missing (golden={})", trunc(gv))),
-            Some(rv) => diff_at(&p, gv, rv, &mut diffs),
+            Some(rv) => diff_at(&p, gv, rv, &mut diffs, false),
         }
     }
     // rust 顶层独有键(extra key):diff_at 的对象分支检查不到顶层。

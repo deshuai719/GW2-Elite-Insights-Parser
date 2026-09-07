@@ -448,6 +448,12 @@ def resolve_buff(args, tail, bare_consts, bare_str):
                 if r and r[0] == 'str':
                     icon = r[1]
                     break
+    # C# 短构造器（Buff.cs:120-125：`Buff(name,id,Source(s),classification,link)`
+    # 委托到 BuffStackType.Force, capacity 1）—— 参数里没有 stack 枚举 token
+    # 但有 classification 时 = 短构造器 → Force/1。仅 3 参公共构造器
+    # （Buff.cs:141-146：Name/ID/link，classification Unknown）保持 Unknown。
+    if stack_type == 'Unknown' and classification != 'Unknown':
+        stack_type = 'Force'
     if idv is None or name is None:
         raise ValueError(f'no id/name: args={args}')
     return {
