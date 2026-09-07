@@ -224,3 +224,20 @@ mod tests {
         assert_eq!(Spec::Unknown.base_spec(), Spec::Unknown);
     }
 }
+
+/// 外部内容目录提供的 spec 判定(prof, elite) → Spec。
+/// C# `GW2APIController.GetSpec`(prof, elite)走 API SpecList 缓存;
+/// Rust 由 `gw2ei-json` 的 Content 目录实现(SpecList.json),默认无表版本
+/// 退化为 `spec_from_prof_elite`(本地硬编码子集)。
+pub trait SpecCatalog {
+    fn spec_of(&self, prof: u32, elite: u32) -> Spec;
+}
+
+/// 无 SpecList 的默认实现(仅本地硬编码表)。
+pub struct NoSpecCatalog;
+
+impl SpecCatalog for NoSpecCatalog {
+    fn spec_of(&self, prof: u32, elite: u32) -> Spec {
+        spec_from_prof_elite(prof, elite)
+    }
+}
