@@ -22,11 +22,13 @@ import re
 import sys
 from pathlib import Path
 
-REPO = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[3]
-PARSER = REPO / "GW2EI.Library" / "GW2EI.Services" / "GW2EIEvtcParser"
+REPO = Path(__file__).resolve().parents[1]  # rust/ 目录(内容资产在其 content/)
+DEFAULT_SRC = REPO.parent  # fork 仓库根(与 rust/ 同级)
+SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SRC
+PARSER = SRC / "GW2EI.Library" / "GW2EI.Services" / "GW2EIEvtcParser"
 ICON_SRC = PARSER / "ParserHelpers" / "Images" / "ParserIcons.cs"
 SPECIES_SRC = PARSER / "ParserHelpers" / "IDs" / "SpeciesIDs.cs"
-OUT = Path(__file__).resolve().parent.parent / "content" / "icons.json"
+OUT = REPO / "content" / "icons.json"
 
 strip_comment = lambda s: re.sub(r"//.*$", "", s).strip()
 

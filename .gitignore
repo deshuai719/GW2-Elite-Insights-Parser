@@ -280,4 +280,9 @@ __pycache__/
 rust/target/
 rust/golden/
 rust/testdata/*.zevtc
-rust/content/
+# Vendored GW2 API caches (no regeneration script; tracked on purpose).
+# The remaining extract-*.py outputs in this directory stay ignored.
+rust/content/*
+!rust/content/SkillList.json
+!rust/content/SpecList.json
+!rust/content/MapList.json
